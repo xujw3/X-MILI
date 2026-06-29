@@ -19,7 +19,7 @@ RUN go build -ldflags "-w -s" -o build/x-ui main.go
 RUN ./DockerInit.sh "$TARGETARCH"
 
 # ========================================================
-# Stage: Final Image of 3x-ui
+# Stage: Final Image of X-MILI
 # ========================================================
 FROM alpine
 ENV TZ=Asia/Tehran
@@ -36,6 +36,7 @@ RUN apk add --no-cache --update \
 COPY --from=builder /app/build/ /app/
 COPY --from=builder /app/DockerEntrypoint.sh /app/
 COPY --from=builder /app/x-ui.sh /usr/bin/x-ui
+COPY --from=builder /app/x-ui.sh /usr/bin/ml
 
 
 # Configure fail2ban
@@ -48,7 +49,8 @@ RUN rm -f /etc/fail2ban/jail.d/alpine-ssh.conf \
 RUN chmod +x \
   /app/DockerEntrypoint.sh \
   /app/x-ui \
-  /usr/bin/x-ui
+  /usr/bin/x-ui \
+  /usr/bin/ml
 
 ENV XUI_ENABLE_FAIL2BAN="true"
 EXPOSE 2053

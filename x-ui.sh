@@ -6,6 +6,35 @@ blue='\033[0;34m'
 yellow='\033[0;33m'
 plain='\033[0m'
 
+app_name="X-MILI"
+repo_raw_base="${X_MILI_RAW_BASE:=https://raw.githubusercontent.com/Aimilibot/X-MILI/main}"
+lang_file="${X_MILI_LANG_FILE:=/etc/x-mili/lang}"
+
+load_language() {
+    if [[ -z "$X_MILI_LANG" && -f "$lang_file" ]]; then
+        X_MILI_LANG=$(cat "$lang_file")
+    fi
+}
+
+is_zh() {
+    [[ "$X_MILI_LANG" == "zh_CN" ]]
+}
+
+choose_language() {
+    load_language
+    [[ -n "$X_MILI_LANG" ]] && return
+    echo -e "${green}1.${plain} English"
+    echo -e "${green}2.${plain} 简体中文"
+    read -rp "Please choose language / 请选择语言 [1-2]: " lang_choice
+    if [[ "$lang_choice" == "2" ]]; then
+        X_MILI_LANG="zh_CN"
+    else
+        X_MILI_LANG="en_US"
+    fi
+    mkdir -p "$(dirname "$lang_file")"
+    echo "$X_MILI_LANG" > "$lang_file"
+}
+
 #Add some basic function here
 function LOGD() {
     echo -e "${yellow}[DEG] $* ${plain}"
@@ -103,23 +132,32 @@ confirm_restart() {
 }
 
 before_show_menu() {
-    echo && echo -n -e "${yellow}Press enter to return to the main menu: ${plain}" && read -r temp
+    if is_zh; then
+        echo && echo -n -e "${yellow}按回车返回主菜单: ${plain}" && read -r temp
+    else
+        echo && echo -n -e "${yellow}Press enter to return to the main menu: ${plain}" && read -r temp
+    fi
     show_menu
 }
 
 install() {
-    LOGE "Upstream install is disabled for this fork."
-    return 1
+    bash <(curl -Ls "${repo_raw_base}/install.sh")
 }
 
 update() {
-    LOGE "Upstream update is disabled for this fork."
-    return 1
+    bash <(curl -Ls "${repo_raw_base}/update.sh")
 }
 
 update_menu() {
-    LOGE "Upstream menu update is disabled for this fork."
-    return 1
+    curl -fLRo /usr/bin/x-ui "${repo_raw_base}/x-ui.sh"
+    cp /usr/bin/x-ui /usr/bin/ml 2> /dev/null || true
+    chmod +x /usr/bin/x-ui /usr/bin/ml 2> /dev/null || true
+    if [[ $? == 0 ]]; then
+        LOGI "$app_name menu updated. Please rerun ml or x-ui."
+    else
+        LOGE "Failed to update $app_name menu."
+        return 1
+    fi
 }
 
 legacy_version() {
@@ -159,7 +197,7 @@ uninstall() {
 
     echo ""
     echo -e "Uninstalled Successfully.\n"
-    echo "Reinstall using your fork's own deployment package."
+    echo "Reinstall with: bash <(curl -Ls ${repo_raw_base}/install.sh)"
     echo ""
     # Trap the SIGTERM signal
     trap delete_script SIGTERM
@@ -190,7 +228,7 @@ reset_user() {
 
     echo -e "Panel login username has been reset to: ${green} ${config_account} ${plain}"
     echo -e "Panel login password has been reset to: ${green} ${config_password} ${plain}"
-    echo -e "${green} Please use the new login username and password to access the X-UI panel. Also remember them! ${plain}"
+    echo -e "${green} Please use the new login username and password to access the $app_name panel. Also remember them! ${plain}"
     confirm_restart
 }
 
@@ -469,10 +507,17 @@ show_log() {
 }
 
 bbr_menu() {
+    if is_zh; then
+        echo -e "${green}\t1.${plain} 启用 BBR"
+        echo -e "${green}\t2.${plain} 禁用 BBR"
+        echo -e "${green}\t0.${plain} 返回主菜单"
+        read -rp "请选择: " choice
+    else
     echo -e "${green}\t1.${plain} Enable BBR"
     echo -e "${green}\t2.${plain} Disable BBR"
     echo -e "${green}\t0.${plain} Back to Main Menu"
     read -rp "Choose an option: " choice
+    fi
     case "$choice" in
         0)
             show_menu
@@ -557,7 +602,10 @@ enable_bbr() {
 }
 
 update_shell() {
-    LOGE "Upstream shell update is disabled for this fork."
+    curl -fLRo /usr/bin/x-ui "${repo_raw_base}/x-ui.sh"
+    cp /usr/bin/x-ui /usr/bin/ml 2> /dev/null || true
+    chmod +x /usr/bin/x-ui /usr/bin/ml 2> /dev/null || true
+    LOGI "$app_name shell updated. Please rerun ml or x-ui."
     before_show_menu
 }
 
@@ -634,15 +682,27 @@ show_status() {
     check_status
     case $? in
         0)
-            echo -e "Panel state: ${green}Running${plain}"
+            if is_zh; then
+                echo -e "面板状态: ${green}运行中${plain}"
+            else
+                echo -e "Panel state: ${green}Running${plain}"
+            fi
             show_enable_status
             ;;
         1)
-            echo -e "Panel state: ${yellow}Not Running${plain}"
+            if is_zh; then
+                echo -e "面板状态: ${yellow}未运行${plain}"
+            else
+                echo -e "Panel state: ${yellow}Not Running${plain}"
+            fi
             show_enable_status
             ;;
         2)
-            echo -e "Panel state: ${red}Not Installed${plain}"
+            if is_zh; then
+                echo -e "面板状态: ${red}未安装${plain}"
+            else
+                echo -e "Panel state: ${red}Not Installed${plain}"
+            fi
             ;;
     esac
     show_xray_status
@@ -651,9 +711,17 @@ show_status() {
 show_enable_status() {
     check_enabled
     if [[ $? == 0 ]]; then
-        echo -e "Start automatically: ${green}Yes${plain}"
+        if is_zh; then
+            echo -e "开机自启: ${green}已开启${plain}"
+        else
+            echo -e "Start automatically: ${green}Yes${plain}"
+        fi
     else
-        echo -e "Start automatically: ${red}No${plain}"
+        if is_zh; then
+            echo -e "开机自启: ${red}未开启${plain}"
+        else
+            echo -e "Start automatically: ${red}No${plain}"
+        fi
     fi
 }
 
@@ -669,13 +737,32 @@ check_xray_status() {
 show_xray_status() {
     check_xray_status
     if [[ $? == 0 ]]; then
-        echo -e "xray state: ${green}Running${plain}"
+        if is_zh; then
+            echo -e "Xray 状态: ${green}运行中${plain}"
+        else
+            echo -e "xray state: ${green}Running${plain}"
+        fi
     else
-        echo -e "xray state: ${red}Not Running${plain}"
+        if is_zh; then
+            echo -e "Xray 状态: ${red}未运行${plain}"
+        else
+            echo -e "xray state: ${red}Not Running${plain}"
+        fi
     fi
 }
 
 firewall_menu() {
+    if is_zh; then
+        echo -e "${green}\t1.${plain} ${green}安装${plain}防火墙"
+        echo -e "${green}\t2.${plain} 查看端口列表"
+        echo -e "${green}\t3.${plain} ${green}开放${plain}端口"
+        echo -e "${green}\t4.${plain} ${red}删除${plain}端口规则"
+        echo -e "${green}\t5.${plain} ${green}启用${plain}防火墙"
+        echo -e "${green}\t6.${plain} ${red}停用${plain}防火墙"
+        echo -e "${green}\t7.${plain} 防火墙状态"
+        echo -e "${green}\t0.${plain} 返回主菜单"
+        read -rp "请选择: " choice
+    else
     echo -e "${green}\t1.${plain} ${green}Install${plain} Firewall"
     echo -e "${green}\t2.${plain} Port List [numbered]"
     echo -e "${green}\t3.${plain} ${green}Open${plain} Ports"
@@ -685,6 +772,7 @@ firewall_menu() {
     echo -e "${green}\t7.${plain} Firewall Status"
     echo -e "${green}\t0.${plain} Back to Main Menu"
     read -rp "Choose an option: " choice
+    fi
     case "$choice" in
         0)
             show_menu
@@ -1647,6 +1735,20 @@ ip_validation() {
 }
 
 iplimit_main() {
+    if is_zh; then
+        echo -e "\n${green}\t1.${plain} 安装 Fail2ban 并配置 IP 限制"
+        echo -e "${green}\t2.${plain} 修改封禁时长"
+        echo -e "${green}\t3.${plain} 解除全部封禁"
+        echo -e "${green}\t4.${plain} 查看封禁日志"
+        echo -e "${green}\t5.${plain} 封禁一个 IP"
+        echo -e "${green}\t6.${plain} 解封一个 IP"
+        echo -e "${green}\t7.${plain} 实时日志"
+        echo -e "${green}\t8.${plain} 服务状态"
+        echo -e "${green}\t9.${plain} 重启服务"
+        echo -e "${green}\t10.${plain} 卸载 Fail2ban 和 IP 限制"
+        echo -e "${green}\t0.${plain} 返回主菜单"
+        read -rp "请选择: " choice
+    else
     echo -e "\n${green}\t1.${plain} Install Fail2ban and configure IP Limit"
     echo -e "${green}\t2.${plain} Change Ban Duration"
     echo -e "${green}\t3.${plain} Unban Everyone"
@@ -1659,6 +1761,7 @@ iplimit_main() {
     echo -e "${green}\t10.${plain} Uninstall Fail2ban and IP Limit"
     echo -e "${green}\t0.${plain} Back to Main Menu"
     read -rp "Choose an option: " choice
+    fi
     case "$choice" in
         0)
             show_menu
@@ -2132,32 +2235,96 @@ SSH_port_forwarding() {
 }
 
 show_usage() {
-    echo -e "┌────────────────────────────────────────────────────────────────┐
-│  ${blue}x-ui control menu usages (subcommands):${plain}                       │
+    if is_zh; then
+        echo -e "┌────────────────────────────────────────────────────────────────┐
+│  ${blue}X-MILI 控制菜单用法（子命令）:${plain}                              │
 │                                                                │
-│  ${blue}x-ui${plain}                       - Admin Management Script          │
-│  ${blue}x-ui start${plain}                 - Start                            │
-│  ${blue}x-ui stop${plain}                  - Stop                             │
-│  ${blue}x-ui restart${plain}               - Restart                          │
-|  ${blue}x-ui restart-xray${plain}          - Restart Xray                     │
-│  ${blue}x-ui status${plain}                - Current Status                   │
-│  ${blue}x-ui settings${plain}              - Current Settings                 │
-│  ${blue}x-ui enable${plain}                - Enable Autostart on OS Startup   │
-│  ${blue}x-ui disable${plain}               - Disable Autostart on OS Startup  │
-│  ${blue}x-ui log${plain}                   - Check logs                       │
-│  ${blue}x-ui banlog${plain}                - Check Fail2ban ban logs          │
-│  ${blue}x-ui update${plain}                - Update                           │
-│  ${blue}x-ui update-all-geofiles${plain}   - Update all geo files             │
-│  ${blue}x-ui legacy${plain}                - Legacy version                   │
-│  ${blue}x-ui install${plain}               - Install                          │
-│  ${blue}x-ui uninstall${plain}             - Uninstall                        │
+│  ${blue}ml${plain}                        - 管理脚本                         │
+│  ${blue}ml start${plain}                  - 启动                             │
+│  ${blue}ml stop${plain}                   - 停止                             │
+│  ${blue}ml restart${plain}                - 重启面板                         │
+│  ${blue}ml restart-xray${plain}           - 重启 Xray                        │
+│  ${blue}ml status${plain}                 - 查看状态                         │
+│  ${blue}ml settings${plain}               - 查看当前设置                     │
+│  ${blue}ml enable${plain}                 - 开机自启                         │
+│  ${blue}ml disable${plain}                - 关闭开机自启                     │
+│  ${blue}ml log${plain}                    - 查看日志                         │
+│  ${blue}ml banlog${plain}                 - 查看封禁日志                     │
+│  ${blue}ml update${plain}                 - 更新                             │
+│  ${blue}ml update-all-geofiles${plain}    - 更新 Geo 文件                    │
+│  ${blue}ml install${plain}                - 安装                             │
+│  ${blue}ml uninstall${plain}              - 卸载                             │
+└────────────────────────────────────────────────────────────────┘"
+        return
+    fi
+    echo -e "┌────────────────────────────────────────────────────────────────┐
+│  ${blue}X-MILI control menu usages (subcommands):${plain}                     │
+│                                                                │
+│  ${blue}ml${plain}                        - Admin Management Script           │
+│  ${blue}ml start${plain}                  - Start                             │
+│  ${blue}ml stop${plain}                   - Stop                              │
+│  ${blue}ml restart${plain}                - Restart                           │
+|  ${blue}ml restart-xray${plain}           - Restart Xray                      │
+│  ${blue}ml status${plain}                 - Current Status                    │
+│  ${blue}ml settings${plain}               - Current Settings                  │
+│  ${blue}ml enable${plain}                 - Enable Autostart on OS Startup    │
+│  ${blue}ml disable${plain}                - Disable Autostart on OS Startup   │
+│  ${blue}ml log${plain}                    - Check logs                        │
+│  ${blue}ml banlog${plain}                 - Check Fail2ban ban logs           │
+│  ${blue}ml update${plain}                 - Update                            │
+│  ${blue}ml update-all-geofiles${plain}    - Update all geo files              │
+│  ${blue}ml install${plain}                - Install                           │
+│  ${blue}ml uninstall${plain}              - Uninstall                         │
 └────────────────────────────────────────────────────────────────┘"
 }
 
 show_menu() {
+    choose_language
+    if is_zh; then
+        echo -e "
+╔────────────────────────────────────────────────╗
+│   ${green}X-MILI 面板管理脚本${plain}                         │
+│   ${green}0.${plain} 退出脚本                                 │
+│────────────────────────────────────────────────│
+│   ${green}1.${plain} 安装                                     │
+│   ${green}2.${plain} 更新                                     │
+│   ${green}3.${plain} 更新菜单                                 │
+│   ${green}4.${plain} 安装旧版本（已禁用）                     │
+│   ${green}5.${plain} 卸载                                     │
+│────────────────────────────────────────────────│
+│   ${green}6.${plain} 重置用户名和密码                         │
+│   ${green}7.${plain} 重置面板访问路径                         │
+│   ${green}8.${plain} 重置面板设置                             │
+│   ${green}9.${plain} 修改端口                                 │
+│  ${green}10.${plain} 查看当前设置                             │
+│────────────────────────────────────────────────│
+│  ${green}11.${plain} 启动                                     │
+│  ${green}12.${plain} 停止                                     │
+│  ${green}13.${plain} 重启面板                                 │
+|  ${green}14.${plain} 重启 Xray                                │
+│  ${green}15.${plain} 查看状态                                 │
+│  ${green}16.${plain} 日志管理                                 │
+│────────────────────────────────────────────────│
+│  ${green}17.${plain} 开启开机自启                             │
+│  ${green}18.${plain} 关闭开机自启                             │
+│────────────────────────────────────────────────│
+│  ${green}19.${plain} SSL 证书管理                             │
+│  ${green}20.${plain} Cloudflare SSL 证书                      │
+│  ${green}21.${plain} IP 限制管理                              │
+│  ${green}22.${plain} 防火墙管理                               │
+│  ${green}23.${plain} SSH 端口转发管理                         │
+│────────────────────────────────────────────────│
+│  ${green}24.${plain} 启用 BBR                                 │
+│  ${green}25.${plain} 更新 Geo 文件                            │
+│  ${green}26.${plain} Ookla 测速                               │
+╚────────────────────────────────────────────────╝
+"
+        show_status
+        echo && read -rp "请输入选项 [0-26]: " num
+    else
     echo -e "
 ╔────────────────────────────────────────────────╗
-│   ${green}3X-UI Panel Management Script${plain}                │
+│   ${green}X-MILI Panel Management Script${plain}                │
 │   ${green}0.${plain} Exit Script                               │
 │────────────────────────────────────────────────│
 │   ${green}1.${plain} Install                                   │
@@ -2195,6 +2362,7 @@ show_menu() {
 "
     show_status
     echo && read -rp "Please enter your selection [0-26]: " num
+    fi
 
     case "${num}" in
         0)
