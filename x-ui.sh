@@ -1472,10 +1472,10 @@ ssl_cert_issue() {
     local existing_port=$(${xui_folder}/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
     # check for acme.sh first
     if ! command -v ~/.acme.sh/acme.sh &> /dev/null; then
-        echo "acme.sh could not be found. we will install it"
+        is_zh && echo "未找到 acme.sh。我们现在开始安装它。" || echo "acme.sh could not be found. we will install it"
         install_acme
         if [ $? -ne 0 ]; then
-            LOGE "install acme failed, please check logs"
+            is_zh && LOGE "安装 acme 失败，请检查日志。" || LOGE "install acme failed, please check logs"
             exit 1
         fi
     fi
@@ -1505,35 +1505,35 @@ ssl_cert_issue() {
             apk add socat curl openssl > /dev/null 2>&1
             ;;
         *)
-            LOGW "Unsupported OS for automatic socat installation"
+            is_zh && LOGW "不支持的系统，无法自动安装 socat" || LOGW "Unsupported OS for automatic socat installation"
             ;;
     esac
     if [ $? -ne 0 ]; then
-        LOGE "install socat failed, please check logs"
+        is_zh && LOGE "安装 socat 失败，请检查日志。" || LOGE "install socat failed, please check logs"
         exit 1
     else
-        LOGI "install socat succeed..."
+        is_zh && LOGI "安装 socat 成功..." || LOGI "install socat succeed..."
     fi
 
     # get the domain here, and we need to verify it
     local domain=""
     while true; do
-        read -rp "Please enter your domain name: " domain
+        is_zh && read -rp "请输入您的域名: " domain || read -rp "Please enter your domain name: " domain
         domain="${domain// /}" # Trim whitespace
 
         if [[ -z "$domain" ]]; then
-            LOGE "Domain name cannot be empty. Please try again."
+            is_zh && LOGE "域名不能为空，请重试。" || LOGE "Domain name cannot be empty. Please try again."
             continue
         fi
 
         if ! is_domain "$domain"; then
-            LOGE "Invalid domain format: ${domain}. Please enter a valid domain name."
+            is_zh && LOGE "域名格式无效: ${domain}。请重新输入。" || LOGE "Invalid domain format: ${domain}. Please enter a valid domain name."
             continue
         fi
 
         break
     done
-    LOGD "Your domain is: ${domain}, checking it..."
+    is_zh && LOGD "您的域名为: ${domain}，正在检查..." || LOGD "Your domain is: ${domain}, checking it..."
     SSL_ISSUED_DOMAIN="${domain}"
 
     # detect existing certificate and reuse it if present
@@ -1541,10 +1541,10 @@ ssl_cert_issue() {
     if ~/.acme.sh/acme.sh --list 2> /dev/null | awk '{print $1}' | grep -Fxq "${domain}"; then
         cert_exists=1
         local certInfo=$(~/.acme.sh/acme.sh --list 2> /dev/null | grep -F "${domain}")
-        LOGI "Existing certificate found for ${domain}, will reuse it."
+        is_zh && LOGI "发现 ${domain} 已有证书，将复用它。" || LOGI "Existing certificate found for ${domain}, will reuse it."
         [[ -n "${certInfo}" ]] && LOGI "${certInfo}"
     else
-        LOGI "Your domain is ready for issuing certificates now..."
+        is_zh && LOGI "您的域名准备好申请证书了..." || LOGI "Your domain is ready for issuing certificates now..."
     fi
 
     # create a directory for the certificate
@@ -1558,50 +1558,69 @@ ssl_cert_issue() {
 
     # get the port number for the standalone server
     local WebPort=80
-    read -rp "Please choose which port to use (default is 80): " WebPort
+    is_zh && read -rp "请选择使用的端口 (默认 80): " WebPort || read -rp "Please choose which port to use (default is 80): " WebPort
     if [[ ${WebPort} -gt 65535 || ${WebPort} -lt 1 ]]; then
-        LOGE "Your input ${WebPort} is invalid, will use default port 80."
+        is_zh && LOGE "输入的端口 ${WebPort} 无效，将使用默认的 80 端口。" || LOGE "Your input ${WebPort} is invalid, will use default port 80."
         WebPort=80
     fi
-    LOGI "Will use port: ${WebPort} to issue certificates. Please make sure this port is open."
+    is_zh && LOGI "将使用端口: ${WebPort} 进行证书签发，请确保该端口已开启。" || LOGI "Will use port: ${WebPort} to issue certificates. Please make sure this port is open."
 
     if [[ ${cert_exists} -eq 0 ]]; then
         # issue the certificate
         ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt --force
         ~/.acme.sh/acme.sh --issue -d ${domain} --listen-v6 --standalone --httpport ${WebPort} --force
         if [ $? -ne 0 ]; then
-            LOGE "Issuing certificate failed, please check logs."
+            is_zh && LOGE "签发证书失败，请检查日志。" || LOGE "Issuing certificate failed, please check logs."
             rm -rf ~/.acme.sh/${domain}
             exit 1
         else
-            LOGE "Issuing certificate succeeded, installing certificates..."
+            is_zh && LOGI "签发证书成功，正在安装证书..." || LOGE "Issuing certificate succeeded, installing certificates..."
         fi
     else
-        LOGI "Using existing certificate, installing certificates..."
+        is_zh && LOGI "使用已有证书，正在安装..." || LOGI "Using existing certificate, installing certificates..."
     fi
 
-    reloadCmd="x-ui restart"
+    reloadCmd="ml restart"
 
-    LOGI "Default --reloadcmd for ACME is: ${yellow}x-ui restart"
-    LOGI "This command will run on every certificate issue and renew."
-    read -rp "Would you like to modify --reloadcmd for ACME? (y/n): " setReloadcmd
+    if is_zh; then
+        LOGI "ACME 的默认重载命令 --reloadcmd 为: ${yellow}ml restart${plain}"
+        LOGI "此命令将在每次证书签发和续签时运行。"
+        read -rp "您是否想要修改 ACME 的 --reloadcmd？(y/n): " setReloadcmd
+    else
+        LOGI "Default --reloadcmd for ACME is: ${yellow}ml restart${plain}"
+        LOGI "This command will run on every certificate issue and renew."
+        read -rp "Would you like to modify --reloadcmd for ACME? (y/n): " setReloadcmd
+    fi
     if [[ "$setReloadcmd" == "y" || "$setReloadcmd" == "Y" ]]; then
-        echo -e "\n${green}\t1.${plain} Preset: systemctl reload nginx ; x-ui restart"
-        echo -e "${green}\t2.${plain} Input your own command"
-        echo -e "${green}\t0.${plain} Keep default reloadcmd"
-        read -rp "Choose an option: " choice
+        if is_zh; then
+            echo -e "\n${green}\t1.${plain} 预设: systemctl reload nginx ; ml restart"
+            echo -e "${green}\t2.${plain} 输入自定义命令"
+            echo -e "${green}\t0.${plain} 保持默认重载命令"
+            read -rp "请选择: " choice
+        else
+            echo -e "\n${green}\t1.${plain} Preset: systemctl reload nginx ; ml restart"
+            echo -e "${green}\t2.${plain} Input your own command"
+            echo -e "${green}\t0.${plain} Keep default reloadcmd"
+            read -rp "Choose an option: " choice
+        fi
         case "$choice" in
             1)
-                LOGI "Reloadcmd is: systemctl reload nginx ; x-ui restart"
-                reloadCmd="systemctl reload nginx ; x-ui restart"
+                is_zh && LOGI "重载命令设为: systemctl reload nginx ; ml restart" || LOGI "Reloadcmd is: systemctl reload nginx ; ml restart"
+                reloadCmd="systemctl reload nginx ; ml restart"
                 ;;
             2)
-                LOGD "It's recommended to put x-ui restart at the end, so it won't raise an error if other services fails"
-                read -rp "Please enter your reloadcmd (example: systemctl reload nginx ; x-ui restart): " reloadCmd
-                LOGI "Your reloadcmd is: ${reloadCmd}"
+                if is_zh; then
+                    LOGD "推荐在末尾放置 ml restart，以防其他服务失败时报错退出"
+                    read -rp "请输入您的重载命令 (例如: systemctl reload nginx ; ml restart): " reloadCmd
+                    LOGI "您的重载命令是: ${reloadCmd}"
+                else
+                    LOGD "It's recommended to put ml restart at the end, so it won't raise an error if other services fails"
+                    read -rp "Please enter your reloadcmd (example: systemctl reload nginx ; ml restart): " reloadCmd
+                    LOGI "Your reloadcmd is: ${reloadCmd}"
+                fi
                 ;;
             *)
-                LOGI "Keep default reloadcmd"
+                is_zh && LOGI "保持默认重载命令" || LOGI "Keep default reloadcmd"
                 ;;
         esac
     fi
@@ -1616,7 +1635,75 @@ ssl_cert_issue() {
 
     local installWroteFiles=0
     if echo "${installOutput}" | grep -q "Installing key to:" && echo "${installOutput}" | grep -q "Installing full chain to:"; then
-        installWrotssl_cert_issue_CF() {
+        installWroteFiles=1
+    fi
+
+    if [[ -f "/root/cert/${domain}/privkey.pem" && -f "/root/cert/${domain}/fullchain.pem" && (${installRc} -eq 0 || ${installWroteFiles} -eq 1) ]]; then
+        is_zh && LOGI "证书安装成功，正在开启自动更新..." || LOGI "Installing certificate succeeded, enabling auto renew..."
+    else
+        is_zh && LOGE "证书安装失败，退出。" || LOGE "Installing certificate failed, exiting."
+        if [[ ${cert_exists} -eq 0 ]]; then
+            rm -rf ~/.acme.sh/${domain}
+        fi
+        exit 1
+    fi
+
+    # enable auto-renew
+    ~/.acme.sh/acme.sh --upgrade --auto-upgrade
+    if [ $? -ne 0 ]; then
+        if is_zh; then
+            LOGE "开启证书自动更新失败，具体证书信息如下:"
+        else
+            LOGE "Auto renew failed, certificate details:"
+        fi
+        ls -lah cert/*
+        chmod 600 $certPath/privkey.pem
+        chmod 644 $certPath/fullchain.pem
+        exit 1
+    else
+        if is_zh; then
+            LOGI "证书安装完成且自动续签已开启。具体信息如下:"
+        else
+            LOGI "Auto renew succeeded, certificate details:"
+        fi
+        ls -lah cert/*
+        chmod 600 $certPath/privkey.pem
+        chmod 644 $certPath/fullchain.pem
+    fi
+
+    # Prompt user to set panel paths after successful certificate installation
+    if is_zh; then
+        read -rp "是否想要将此证书设置为面板证书路径？(y/n): " setPanel
+    else
+        read -rp "Would you like to set this certificate for the panel? (y/n): " setPanel
+    fi
+    if [[ "$setPanel" == "y" || "$setPanel" == "Y" ]]; then
+        local webCertFile="/root/cert/${domain}/fullchain.pem"
+        local webKeyFile="/root/cert/${domain}/privkey.pem"
+
+        if [[ -f "$webCertFile" && -f "$webKeyFile" ]]; then
+            ${xui_folder}/x-ui cert -webCert "$webCertFile" -webCertKey "$webKeyFile"
+            if is_zh; then
+                LOGI "面板证书路径已设置为域名: $domain"
+                LOGI "  - 证书文件: $webCertFile"
+                LOGI "  - 私钥文件: $webKeyFile"
+                echo -e "${green}访问地址: https://${domain}:${existing_port}${existing_webBasePath}${plain}"
+            else
+                LOGI "Panel paths set for domain: $domain"
+                LOGI "  - Certificate File: $webCertFile"
+                LOGI "  - Private Key File: $webKeyFile"
+                echo -e "${green}Access URL: https://${domain}:${existing_port}${existing_webBasePath}${plain}"
+            fi
+            restart
+        else
+            is_zh && LOGE "错误：未找到域名 $domain 的证书或私钥文件。" || LOGE "Error: Certificate or private key file not found for domain: $domain."
+        fi
+    else
+        is_zh && LOGI "跳过设置面板证书路径。" || LOGI "Skipping panel path setting."
+    fi
+}
+
+ssl_cert_issue_CF() {
     local existing_webBasePath=$(${xui_folder}/x-ui setting -show true | grep -Eo 'webBasePath: .+' | awk '{print $2}')
     local existing_port=$(${xui_folder}/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
     if is_zh; then
