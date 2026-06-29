@@ -38,13 +38,13 @@ is_zh() { [[ "$X_MILI_LANG" == "zh_CN" ]]; }
 install_deps() {
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update
-        apt-get install -y ca-certificates curl tar gzip unzip gcc g++ make
+        apt-get install -y ca-certificates curl tar gzip unzip gcc g++ make openssl
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make
+        dnf install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make
+        yum install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl
     elif command -v apk >/dev/null 2>&1; then
-        apk add --no-cache ca-certificates curl tar gzip unzip build-base
+        apk add --no-cache ca-certificates curl tar gzip unzip build-base openssl
     else
         fail "Unsupported package manager / 不支持的包管理器"
     fi
@@ -92,6 +92,102 @@ clean_old_runtime() {
     fi
     rm -f /usr/bin/ml /usr/bin/x-ui
     mkdir -p "$INSTALL_DIR" "$DATA_DIR" "$LANG_DIR"
+}
+
+gen_random_string() {
+    local length="$1"
+    if command -v openssl >/dev/null 2>&1; then
+        openssl rand -base64 $((length * 2)) | tr -dc 'a-zA-Z0-9' | head -c "$length"
+    else
+        tr -dc 'a-zA-Z0-9' </dev/urandom | head -c "$length"
+    fi
+}
+
+get_server_ip() {
+    local ip
+    ip=$(curl -s --max-time 3 https://api.ipify.org || true)
+    [[ -n "$ip" ]] || ip=$(curl -s --max-time 3 https://4.ident.me || true)
+    [[ -n "$ip" ]] && echo "$ip" || echo "服务器IP"
+}
+
+normalize_web_path() {
+    local path="$1"
+    [[ -n "$path" ]] || path="/"
+    [[ "$path" == /* ]] || path="/${path}"
+    [[ "$path" == */ ]] || path="${path}/"
+    echo "$path"
+}
+
+extract_setting() {
+    local info="$1"
+    local key="$2"
+    echo "$info" | awk -v k="${key}:" '$1 == k {print $2; exit}'
+}
+
+panel_needs_initialization() {
+    local info
+    info=$("${INSTALL_DIR}/x-ui" setting -show true 2>/dev/null || true)
+    [[ -z "$info" ]] && return 0
+    echo "$info" | grep -q "hasDefaultCredential: true"
+}
+
+init_panel_settings() {
+    panel_credentials_initialized=0
+    if panel_needs_initialization; then
+        panel_username="${X_MILI_USERNAME:-$(gen_random_string 10)}"
+        panel_password="${X_MILI_PASSWORD:-$(gen_random_string 18)}"
+        panel_web_path="${X_MILI_WEB_BASE_PATH:-$(gen_random_string 18)}"
+
+        "${INSTALL_DIR}/x-ui" setting \
+            -username "$panel_username" \
+            -password "$panel_password" \
+            -resetTwoFactor true >/dev/null 2>&1
+        "${INSTALL_DIR}/x-ui" setting -webBasePath "$panel_web_path" >/dev/null 2>&1
+        panel_credentials_initialized=1
+        is_zh && log "已生成随机面板账号、密码和访问路径" || log "Generated random panel username, password and web path"
+    else
+        is_zh && log "检测到已有非默认面板账号，保留现有登录信息" || log "Existing non-default panel account detected, keeping current login"
+    fi
+}
+
+print_install_guide() {
+    local info port web_path server_ip cert protocol
+    info=$("${INSTALL_DIR}/x-ui" setting -show true 2>/dev/null || true)
+    port=$(extract_setting "$info" "port")
+    web_path=$(extract_setting "$info" "webBasePath")
+    port="${port:-2053}"
+    web_path=$(normalize_web_path "$web_path")
+    server_ip=$(get_server_ip)
+    cert=$("${INSTALL_DIR}/x-ui" setting -getCert true 2>/dev/null | grep 'cert:' | awk -F': ' '{print $2}' | tr -d '[:space:]' || true)
+    [[ -n "$cert" ]] && protocol="https" || protocol="http"
+
+    echo ""
+    if is_zh; then
+        echo -e "${green}================ X-MILI 安装完成 ================${plain}"
+        echo -e "管理命令: ${green}ml${plain}"
+        echo -e "访问地址: ${green}${protocol}://${server_ip}:${port}${web_path}${plain}"
+        if [[ "$panel_credentials_initialized" == "1" ]]; then
+            echo -e "用户名: ${green}${panel_username}${plain}"
+            echo -e "密码: ${green}${panel_password}${plain}"
+        else
+            echo -e "登录信息: ${yellow}已保留现有账号和密码${plain}"
+        fi
+        echo -e "数据目录: ${yellow}${DATA_DIR}${plain}"
+        echo -e "${green}=================================================${plain}"
+    else
+        echo -e "${green}================ X-MILI Installed ================${plain}"
+        echo -e "Command: ${green}ml${plain}"
+        echo -e "URL: ${green}${protocol}://${server_ip}:${port}${web_path}${plain}"
+        if [[ "$panel_credentials_initialized" == "1" ]]; then
+            echo -e "Username: ${green}${panel_username}${plain}"
+            echo -e "Password: ${green}${panel_password}${plain}"
+        else
+            echo -e "Login: ${yellow}existing username and password preserved${plain}"
+        fi
+        echo -e "Data directory: ${yellow}${DATA_DIR}${plain}"
+        echo -e "${green}==================================================${plain}"
+    fi
+    echo ""
 }
 
 install_service() {
@@ -144,7 +240,9 @@ install -m 755 x-ui.sh /usr/bin/x-ui
 install -m 755 x-ui.sh /usr/bin/ml
 echo "$X_MILI_LANG" > "$LANG_FILE"
 
+init_panel_settings
 install_service
+print_install_guide
 
 is_zh && log "安装完成。命令：ml" || log "Done. Command: ml"
 is_zh && warn "默认数据目录仍为 ${DATA_DIR}，用于兼容旧数据。" || warn "Data directory remains ${DATA_DIR} for compatibility."

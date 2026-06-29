@@ -79,8 +79,13 @@ is_domain() {
     [[ "$1" =~ ^([A-Za-z0-9](-*[A-Za-z0-9])*\.)+(xn--[a-z0-9]{2,}|[A-Za-z]{2,})$ ]] && return 0 || return 1
 }
 
+load_language
+
 # check root
-[[ $EUID -ne 0 ]] && LOGE "ERROR: You must be root to run this script! \n" && exit 1
+if [[ $EUID -ne 0 ]]; then
+    is_zh && LOGE "错误：请使用 root 运行此脚本！\n" || LOGE "ERROR: You must be root to run this script! \n"
+    exit 1
+fi
 
 # Check OS and set release variable
 if [[ -f /etc/os-release ]]; then
@@ -90,10 +95,14 @@ elif [[ -f /usr/lib/os-release ]]; then
     source /usr/lib/os-release
     release=$ID
 else
-    echo "Failed to check the system OS, please contact the author!" >&2
+    if is_zh; then
+        echo "检测系统发行版失败，请联系维护者！" >&2
+    else
+        echo "Failed to check the system OS, please contact the author!" >&2
+    fi
     exit 1
 fi
-echo "The OS release is: $release"
+is_zh && echo "系统发行版: $release" || echo "The OS release is: $release"
 
 os_version=""
 os_version=$(grep "^VERSION_ID" /etc/os-release | cut -d '=' -f2 | tr -d '"' | tr -d '.')
@@ -107,8 +116,10 @@ iplimit_log_path="${log_folder}/3xipl.log"
 iplimit_banned_log_path="${log_folder}/3xipl-banned.log"
 
 confirm() {
+    local default_label="Default"
+    is_zh && default_label="默认"
     if [[ $# > 1 ]]; then
-        echo && read -rp "$1 [Default $2]: " temp
+        echo && read -rp "$1 [${default_label} $2]: " temp
         if [[ "${temp}" == "" ]]; then
             temp=$2
         fi
@@ -123,7 +134,11 @@ confirm() {
 }
 
 confirm_restart() {
-    confirm "Restart the panel, Attention: Restarting the panel will also restart xray" "y"
+    if is_zh; then
+        confirm "是否重启面板？注意：重启面板也会重启 Xray" "y"
+    else
+        confirm "Restart the panel, Attention: Restarting the panel will also restart xray" "y"
+    fi
     if [[ $? == 0 ]]; then
         restart
     else
@@ -205,7 +220,11 @@ uninstall() {
 }
 
 reset_user() {
-    confirm "Are you sure to reset the username and password of the panel?" "n"
+    if is_zh; then
+        confirm "确定要重置面板用户名和密码吗？" "n"
+    else
+        confirm "Are you sure to reset the username and password of the panel?" "n"
+    fi
     if [[ $? != 0 ]]; then
         if [[ $# == 0 ]]; then
             show_menu
@@ -213,22 +232,40 @@ reset_user() {
         return 0
     fi
 
-    read -rp "Please set the login username [default is a random username]: " config_account
+    if is_zh; then
+        read -rp "请输入登录用户名 [留空则随机生成]: " config_account
+    else
+        read -rp "Please set the login username [default is a random username]: " config_account
+    fi
     [[ -z $config_account ]] && config_account=$(gen_random_string 10)
-    read -rp "Please set the login password [default is a random password]: " config_password
+    if is_zh; then
+        read -rp "请输入登录密码 [留空则随机生成]: " config_password
+    else
+        read -rp "Please set the login password [default is a random password]: " config_password
+    fi
     [[ -z $config_password ]] && config_password=$(gen_random_string 18)
 
-    read -rp "Do you want to disable currently configured two-factor authentication? (y/n): " twoFactorConfirm
+    if is_zh; then
+        read -rp "是否关闭当前已配置的两步验证？(y/n): " twoFactorConfirm
+    else
+        read -rp "Do you want to disable currently configured two-factor authentication? (y/n): " twoFactorConfirm
+    fi
     if [[ $twoFactorConfirm != "y" && $twoFactorConfirm != "Y" ]]; then
         ${xui_folder}/x-ui setting -username "${config_account}" -password "${config_password}" -resetTwoFactor false > /dev/null 2>&1
     else
         ${xui_folder}/x-ui setting -username "${config_account}" -password "${config_password}" -resetTwoFactor true > /dev/null 2>&1
-        echo -e "Two factor authentication has been disabled."
+        is_zh && echo -e "两步验证已关闭。" || echo -e "Two factor authentication has been disabled."
     fi
 
-    echo -e "Panel login username has been reset to: ${green} ${config_account} ${plain}"
-    echo -e "Panel login password has been reset to: ${green} ${config_password} ${plain}"
-    echo -e "${green} Please use the new login username and password to access the $app_name panel. Also remember them! ${plain}"
+    if is_zh; then
+        echo -e "面板登录用户名已重置为: ${green}${config_account}${plain}"
+        echo -e "面板登录密码已重置为: ${green}${config_password}${plain}"
+        echo -e "${green}请使用新的用户名和密码访问 ${app_name} 面板，并妥善保存。${plain}"
+    else
+        echo -e "Panel login username has been reset to: ${green} ${config_account} ${plain}"
+        echo -e "Panel login password has been reset to: ${green} ${config_password} ${plain}"
+        echo -e "${green} Please use the new login username and password to access the $app_name panel. Also remember them! ${plain}"
+    fi
     confirm_restart
 }
 
@@ -240,26 +277,38 @@ gen_random_string() {
 }
 
 reset_webbasepath() {
-    echo -e "${yellow}Resetting Web Base Path${plain}"
+    is_zh && echo -e "${yellow}正在重置面板访问路径${plain}" || echo -e "${yellow}Resetting Web Base Path${plain}"
 
-    read -rp "Are you sure you want to reset the web base path? (y/n): " confirm
+    if is_zh; then
+        read -rp "确定要重置面板访问路径吗？(y/n): " confirm
+    else
+        read -rp "Are you sure you want to reset the web base path? (y/n): " confirm
+    fi
     if [[ $confirm != "y" && $confirm != "Y" ]]; then
-        echo -e "${yellow}Operation canceled.${plain}"
+        is_zh && echo -e "${yellow}操作已取消。${plain}" || echo -e "${yellow}Operation canceled.${plain}"
         return
     fi
 
     config_webBasePath=$(gen_random_string 18)
 
-    # Apply the new web base path setting
     ${xui_folder}/x-ui setting -webBasePath "${config_webBasePath}" > /dev/null 2>&1
 
-    echo -e "Web base path has been reset to: ${green}${config_webBasePath}${plain}"
-    echo -e "${green}Please use the new web base path to access the panel.${plain}"
+    if is_zh; then
+        echo -e "面板访问路径已重置为: ${green}/${config_webBasePath}/${plain}"
+        echo -e "${green}请使用新的访问路径进入面板。${plain}"
+    else
+        echo -e "Web base path has been reset to: ${green}${config_webBasePath}${plain}"
+        echo -e "${green}Please use the new web base path to access the panel.${plain}"
+    fi
     restart
 }
 
 reset_config() {
-    confirm "Are you sure you want to reset all panel settings, Account data will not be lost, Username and password will not change" "n"
+    if is_zh; then
+        confirm "确定要重置所有面板设置吗？账号数据不会丢失，用户名和密码不会改变" "n"
+    else
+        confirm "Are you sure you want to reset all panel settings, Account data will not be lost, Username and password will not change" "n"
+    fi
     if [[ $? != 0 ]]; then
         if [[ $# == 0 ]]; then
             show_menu
@@ -267,67 +316,77 @@ reset_config() {
         return 0
     fi
     ${xui_folder}/x-ui setting -reset
-    echo -e "All panel settings have been reset to default."
+    is_zh && echo -e "所有面板设置已重置为默认值。" || echo -e "All panel settings have been reset to default."
     restart
 }
 
 check_config() {
     local info=$(${xui_folder}/x-ui setting -show true)
     if [[ $? != 0 ]]; then
-        LOGE "get current settings error, please check logs"
+        is_zh && LOGE "获取当前设置失败，请检查日志" || LOGE "get current settings error, please check logs"
         show_menu
         return
     fi
-    LOGI "${info}"
 
     local existing_webBasePath=$(echo "$info" | grep -Eo 'webBasePath: .+' | awk '{print $2}')
     local existing_port=$(echo "$info" | grep -Eo 'port: .+' | awk '{print $2}')
+    local has_default_credential=$(echo "$info" | grep -Eo 'hasDefaultCredential: .+' | awk '{print $2}')
     local existing_cert=$(${xui_folder}/x-ui setting -getCert true | grep 'cert:' | awk -F': ' '{print $2}' | tr -d '[:space:]')
     local server_ip=$(curl -s --max-time 3 https://api.ipify.org)
     if [ -z "$server_ip" ]; then
         server_ip=$(curl -s --max-time 3 https://4.ident.me)
+    fi
+    [[ -n "$server_ip" ]] || server_ip="服务器IP"
+
+    if is_zh; then
+        echo -e "${green}当前面板设置:${plain}"
+        echo -e "端口: ${green}${existing_port}${plain}"
+        echo -e "访问路径: ${green}${existing_webBasePath}${plain}"
+        if [[ "$has_default_credential" == "true" ]]; then
+            echo -e "默认账号: ${red}是，请使用菜单 6 立即重置用户名和密码${plain}"
+        else
+            echo -e "默认账号: ${green}否${plain}"
+        fi
+    else
+        LOGI "${info}"
     fi
 
     if [[ -n "$existing_cert" ]]; then
         local domain=$(basename "$(dirname "$existing_cert")")
 
         if [[ "$domain" =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
-            echo -e "${green}Access URL: https://${domain}:${existing_port}${existing_webBasePath}${plain}"
+            is_zh && echo -e "${green}访问地址: https://${domain}:${existing_port}${existing_webBasePath}${plain}" || echo -e "${green}Access URL: https://${domain}:${existing_port}${existing_webBasePath}${plain}"
         else
-            echo -e "${green}Access URL: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
+            is_zh && echo -e "${green}访问地址: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}" || echo -e "${green}Access URL: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
         fi
     else
-        echo -e "${red}⚠ WARNING: No SSL certificate configured!${plain}"
-        echo -e "${yellow}You can get a Let's Encrypt certificate for your IP address (valid ~6 days, auto-renews).${plain}"
-        read -rp "Generate SSL certificate for IP now? [y/N]: " gen_ssl
-        if [[ "$gen_ssl" == "y" || "$gen_ssl" == "Y" ]]; then
-            stop > /dev/null 2>&1
-            ssl_cert_issue_for_ip
-            if [[ $? -eq 0 ]]; then
-                echo -e "${green}Access URL: https://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
-                # ssl_cert_issue_for_ip already restarts the panel, but ensure it's running
-                start > /dev/null 2>&1
-            else
-                LOGE "IP certificate setup failed."
-                echo -e "${yellow}You can try again via option 19 (SSL Certificate Management).${plain}"
-                start > /dev/null 2>&1
-            fi
+        if is_zh; then
+            echo -e "${yellow}访问地址: http://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
+            echo -e "${yellow}当前未配置 SSL。如需 HTTPS，请在菜单 19 中配置 SSL 证书。${plain}"
         else
             echo -e "${yellow}Access URL: http://${server_ip}:${existing_port}${existing_webBasePath}${plain}"
-            echo -e "${yellow}For security, please configure SSL certificate using option 19 (SSL Certificate Management)${plain}"
+            echo -e "${yellow}No SSL certificate configured. Configure SSL via option 19 when needed.${plain}"
         fi
     fi
 }
 
 set_port() {
-    echo -n "Enter port number[1-65535]: "
+    if is_zh; then
+        echo -n "请输入端口号 [1-65535]: "
+    else
+        echo -n "Enter port number[1-65535]: "
+    fi
     read -r port
     if [[ -z "${port}" ]]; then
-        LOGD "Cancelled"
+        is_zh && LOGD "已取消" || LOGD "Cancelled"
         before_show_menu
     else
         ${xui_folder}/x-ui setting -port ${port}
-        echo -e "The port is set, Please restart the panel now, and use the new port ${green}${port}${plain} to access web panel"
+        if is_zh; then
+            echo -e "端口已设置，请重启面板后使用新端口 ${green}${port}${plain} 访问 Web 面板"
+        else
+            echo -e "The port is set, Please restart the panel now, and use the new port ${green}${port}${plain} to access web panel"
+        fi
         confirm_restart
     fi
 }
@@ -2447,7 +2506,7 @@ show_menu() {
             run_speedtest
             ;;
         *)
-            LOGE "Please enter the correct number [0-26]"
+            is_zh && LOGE "请输入正确的选项 [0-26]" || LOGE "Please enter the correct number [0-26]"
             ;;
     esac
 }
