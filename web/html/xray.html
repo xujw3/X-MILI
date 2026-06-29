@@ -1968,6 +1968,48 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  #vpngate-settings-modal .vpngate-refresh-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 120px;
+    gap: 16px;
+    align-items: center;
+  }
+  #vpngate-settings-modal .vpngate-refresh-control .ant-slider {
+    margin: 8px 8px 28px;
+  }
+  .vpngate-confirm {
+    display: grid;
+    gap: 10px;
+    min-width: 260px;
+  }
+  .vpngate-confirm-title {
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 13px;
+  }
+  .light .vpngate-confirm-title {
+    color: rgba(0, 0, 0, 0.55);
+  }
+  .vpngate-confirm-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+  }
+  .light .vpngate-confirm-row {
+    background: rgba(0, 0, 0, 0.035);
+  }
+  .vpngate-confirm-row span {
+    color: rgba(255, 255, 255, 0.55);
+  }
+  .light .vpngate-confirm-row span {
+    color: rgba(0, 0, 0, 0.55);
+  }
+  .vpngate-confirm-row b {
+    font-weight: 600;
+  }
   @media (max-width: 960px) {
     #vpngate-modal .vpngate-current-strip {
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1983,6 +2025,9 @@
     #vpngate-modal .vpngate-footer {
       align-items: flex-start;
       flex-direction: column;
+    }
+    #vpngate-settings-modal .vpngate-refresh-control {
+      grid-template-columns: 1fr;
     }
   }
   #vpngate-modal .vpngate-table {
@@ -2001,10 +2046,36 @@
   .light #vpngate-modal .vpngate-table td {
     border-bottom-color: rgba(0, 0, 0, 0.06);
   }
+  #vpngate-modal .vpngate-country-header {
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.025);
+  }
+  .light #vpngate-modal .vpngate-country-header {
+    background: rgba(0, 0, 0, 0.025);
+  }
+  #vpngate-modal .vpngate-country-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+  }
+  #vpngate-modal .vpngate-country-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: rgba(255, 255, 255, 0.86);
+    font-weight: 600;
+  }
+  .light #vpngate-modal .vpngate-country-name {
+    color: rgba(0, 0, 0, 0.86);
+  }
   #vpngate-modal .vpngate-country {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+    color: inherit;
   }
   #vpngate-modal .vpngate-flag {
     width: 24px;

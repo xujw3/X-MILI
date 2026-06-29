@@ -60,10 +60,20 @@ var vpnGateOpenVPN = &openVPNTask{
 	},
 }
 
+func normalizeVPNGateRuleMode(ruleMode string) string {
+	switch ruleMode {
+	case "fixed", "favorite":
+		return ruleMode
+	default:
+		return "default"
+	}
+}
+
 func (s *OpenVPNService) StartVPNGate(server VPNGateServer, ruleMode string, selectedCountries []string, fallbackEnable bool) (*OpenVPNStatus, error) {
 	if server.OpenVPNConfig == "" {
 		return nil, errors.New("OpenVPN config is empty")
 	}
+	ruleMode = normalizeVPNGateRuleMode(ruleMode)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	vpnGateOpenVPN.Lock()
@@ -614,16 +624,10 @@ func triggerVPNGateFailover(taskID int64) {
 		vpnGateOpenVPN.Unlock()
 		return
 	}
-	ruleMode := vpnGateOpenVPN.ruleMode
+	ruleMode := normalizeVPNGateRuleMode(vpnGateOpenVPN.ruleMode)
 	selectedCountries := vpnGateOpenVPN.selectedCountries
 	fallbackEnable := vpnGateOpenVPN.fallbackEnable
 	currentServer := vpnGateOpenVPN.status.Server
-
-	if ruleMode == "" {
-		vpnGateOpenVPN.fail(taskID, "VPNGate 连接断开，且无后备过滤规则")
-		vpnGateOpenVPN.Unlock()
-		return
-	}
 
 	vpnGateOpenVPN.stopLocked()
 	vpnGateOpenVPN.status.Phase = "connecting"
@@ -651,6 +655,10 @@ func triggerVPNGateFailover(taskID int64) {
 	// 2. Filter servers based on ruleMode & selectedCountries
 	var pool []VPNGateServer
 	if ruleMode == "fixed" {
+		if len(selectedCountries) == 0 {
+			vpnGateOpenVPN.fail(taskID, "固定连接未选择国家/地区")
+			return
+		}
 		for _, s := range servers {
 			if containsString(selectedCountries, s.CountryShort) {
 				pool = append(pool, s)
@@ -665,6 +673,10 @@ func triggerVPNGateFailover(taskID int64) {
 			}
 		}
 	} else if ruleMode == "favorite" {
+		if len(favorites) == 0 {
+			vpnGateOpenVPN.fail(taskID, "收藏连接未选择任何节点")
+			return
+		}
 		for _, s := range servers {
 			if containsString(favorites, s.HostName) {
 				pool = append(pool, s)

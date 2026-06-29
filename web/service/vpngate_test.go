@@ -86,6 +86,21 @@ func TestBuildVPNGateOutbound(t *testing.T) {
 	}
 }
 
+func TestNormalizeVPNGateRuleMode(t *testing.T) {
+	if got := normalizeVPNGateRuleMode("fixed"); got != "fixed" {
+		t.Fatalf("got %q", got)
+	}
+	if got := normalizeVPNGateRuleMode("favorite"); got != "favorite" {
+		t.Fatalf("got %q", got)
+	}
+	if got := normalizeVPNGateRuleMode(""); got != "default" {
+		t.Fatalf("got %q", got)
+	}
+	if got := normalizeVPNGateRuleMode("bad"); got != "default" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestChooseOpenVPNTunRejectsReusedSingleTun(t *testing.T) {
 	_, _, ok := chooseOpenVPNTun(
 		map[string]string{"tun0": "10.8.0.2"},

@@ -76,6 +76,9 @@ var defaultValueMap = map[string]string{
 	"warp":                        "",
 	"vpngateRefreshInterval":      "120",
 	"vpngateFavorites":            "[]",
+	"vpngateRuleMode":             "default",
+	"vpngateSelectedCountries":    "[]",
+	"vpngateFallbackEnable":       "true",
 }
 
 // SettingService provides business logic for application settings management.
@@ -278,6 +281,30 @@ func (s *SettingService) GetVPNGateFavorites() (string, error) {
 
 func (s *SettingService) SetVPNGateFavorites(value string) error {
 	return s.setString("vpngateFavorites", value)
+}
+
+func (s *SettingService) GetVPNGateRuleMode() (string, error) {
+	return s.getString("vpngateRuleMode")
+}
+
+func (s *SettingService) SetVPNGateRuleMode(value string) error {
+	return s.setString("vpngateRuleMode", value)
+}
+
+func (s *SettingService) GetVPNGateSelectedCountries() (string, error) {
+	return s.getString("vpngateSelectedCountries")
+}
+
+func (s *SettingService) SetVPNGateSelectedCountries(value string) error {
+	return s.setString("vpngateSelectedCountries", value)
+}
+
+func (s *SettingService) GetVPNGateFallbackEnable() (bool, error) {
+	return s.getBool("vpngateFallbackEnable")
+}
+
+func (s *SettingService) SetVPNGateFallbackEnable(value bool) error {
+	return s.setBool("vpngateFallbackEnable", value)
 }
 
 func (s *SettingService) GetListen() (string, error) {

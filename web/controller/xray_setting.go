@@ -182,24 +182,65 @@ func (a *XraySettingController) vpngate(c *gin.Context) {
 		}
 		var favorites []string
 		_ = json.Unmarshal([]byte(favStr), &favorites)
+		ruleMode, errVal := a.SettingService.GetVPNGateRuleMode()
+		if errVal != nil || !isValidVPNGateRuleMode(ruleMode) {
+			ruleMode = "default"
+		}
+		countriesStr, errVal := a.SettingService.GetVPNGateSelectedCountries()
+		if errVal != nil {
+			countriesStr = "[]"
+		}
+		var selectedCountries []string
+		_ = json.Unmarshal([]byte(countriesStr), &selectedCountries)
+		fallbackEnable, errVal := a.SettingService.GetVPNGateFallbackEnable()
+		if errVal != nil {
+			fallbackEnable = true
+		}
 		resp = map[string]any{
-			"favorites":       favorites,
-			"refreshInterval": interval,
+			"favorites":         favorites,
+			"refreshInterval":   interval,
+			"ruleMode":          ruleMode,
+			"selectedCountries": selectedCountries,
+			"fallbackEnable":    fallbackEnable,
 		}
 	case "save_settings":
-		intervalStr := c.PostForm("refreshInterval")
-		interval, errVal := strconv.Atoi(intervalStr)
-		if errVal != nil || interval < 15 || interval > 4320 {
-			interval = 120
+		if intervalStr, ok := c.GetPostForm("refreshInterval"); ok {
+			interval, errVal := strconv.Atoi(intervalStr)
+			if errVal != nil || interval < 15 || interval > 4320 {
+				interval = 120
+			}
+			err = a.SettingService.SetVPNGateRefreshInterval(interval)
 		}
-		favoritesStr := c.PostForm("favorites")
-		var favorites []string
-		if errVal := json.Unmarshal([]byte(favoritesStr), &favorites); errVal != nil {
-			favoritesStr = "[]"
-		}
-		err = a.SettingService.SetVPNGateRefreshInterval(interval)
 		if err == nil {
-			err = a.SettingService.SetVPNGateFavorites(favoritesStr)
+			if favoritesStr, ok := c.GetPostForm("favorites"); ok {
+				var favorites []string
+				if errVal := json.Unmarshal([]byte(favoritesStr), &favorites); errVal != nil {
+					favoritesStr = "[]"
+				}
+				err = a.SettingService.SetVPNGateFavorites(favoritesStr)
+			}
+		}
+		if err == nil {
+			if ruleMode, ok := c.GetPostForm("ruleMode"); ok {
+				if !isValidVPNGateRuleMode(ruleMode) {
+					ruleMode = "default"
+				}
+				err = a.SettingService.SetVPNGateRuleMode(ruleMode)
+			}
+		}
+		if err == nil {
+			if countriesStr, ok := c.GetPostForm("selectedCountries"); ok {
+				var selectedCountries []string
+				if errVal := json.Unmarshal([]byte(countriesStr), &selectedCountries); errVal != nil {
+					countriesStr = "[]"
+				}
+				err = a.SettingService.SetVPNGateSelectedCountries(countriesStr)
+			}
+		}
+		if err == nil {
+			if fallbackEnable, ok := c.GetPostForm("fallbackEnable"); ok {
+				err = a.SettingService.SetVPNGateFallbackEnable(fallbackEnable == "true")
+			}
 		}
 		resp = map[string]any{"success": err == nil}
 	case "status":
@@ -220,6 +261,10 @@ func (a *XraySettingController) vpngate(c *gin.Context) {
 	}
 
 	jsonObj(c, resp, err)
+}
+
+func isValidVPNGateRuleMode(ruleMode string) bool {
+	return ruleMode == "default" || ruleMode == "fixed" || ruleMode == "favorite"
 }
 
 // getOutboundsTraffic retrieves the traffic statistics for outbounds.
