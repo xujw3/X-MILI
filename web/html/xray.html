@@ -2088,6 +2088,30 @@
   #vpngate-modal .vpngate-mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
+  #vpngate-modal .vpngate-switch-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 10px;
+    border-radius: 8px;
+    background: rgba(0, 191, 165, 0.1);
+    border: 1px solid rgba(0, 191, 165, 0.24);
+  }
+  #vpngate-modal .vpngate-switch-card strong,
+  #vpngate-modal .vpngate-switch-card small {
+    display: block;
+    line-height: 1.25;
+  }
+  #vpngate-modal .vpngate-switch-card strong {
+    font-size: 13px;
+  }
+  #vpngate-modal .vpngate-switch-card small {
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+  }
+  .light #vpngate-modal .vpngate-switch-card small {
+    color: rgba(0, 0, 0, 0.55);
+  }
   #vpngate-modal .vpngate-ping-fast { color: #00bfa5; font-weight: 600; }
   #vpngate-modal .vpngate-ping-medium { color: #d97706; }
   #vpngate-modal .vpngate-ping-slow { color: #ff4d4f; }

@@ -127,7 +127,7 @@ func TestNormalizeVPNGateRuleMode(t *testing.T) {
 	if got := normalizeVPNGateRuleMode("fixed"); got != "fixed" {
 		t.Fatalf("got %q", got)
 	}
-	if got := normalizeVPNGateRuleMode("favorite"); got != "favorite" {
+	if got := normalizeVPNGateRuleMode("favorite"); got != "default" {
 		t.Fatalf("got %q", got)
 	}
 	if got := normalizeVPNGateRuleMode(""); got != "default" {

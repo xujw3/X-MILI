@@ -41,7 +41,7 @@
                         </div>
                         <div>
                             <small>延迟</small>
-                            <span :class="pingClass(displayServer.localPing)">[[ displayServer.localPing < 0 ? '超时' : displayServer.localPing + ' ms' ]]</span>
+                            <span :class="pingClass(displayServer.localPing)">[[ formatPing(displayServer.localPing) ]]</span>
                         </div>
                     </div>
                 </template>
@@ -70,10 +70,14 @@
                     <a-radio-group v-model="vpngateModal.ruleMode" button-style="solid" size="small" @change="onRuleModeChanged">
                         <a-radio-button value="default">自动</a-radio-button>
                         <a-radio-button value="fixed">国家</a-radio-button>
-                        <a-radio-button value="favorite">收藏</a-radio-button>
                     </a-radio-group>
-                    <span>失败自动重连</span>
-                    <a-switch v-model="vpngateModal.fallbackEnable" @change="saveVPNGateSettings"></a-switch>
+                    <div class="vpngate-switch-card">
+                        <div>
+                            <strong>失效替换</strong>
+                            <small>连接失败或掉线时自动换下一个节点</small>
+                        </div>
+                        <a-switch v-model="vpngateModal.fallbackEnable" checked-children="开" un-checked-children="关" @change="saveVPNGateSettings"></a-switch>
+                    </div>
                     <a-button icon="sync" @click="create(true)" :loading="vpngateModal.confirmLoading">刷新</a-button>
                     <a-switch v-model="vpngateModal.showUnavailable" checked-children="显示不可用" un-checked-children="隐藏不可用" @change="create(true)"></a-switch>
                     <a-button type="danger" icon="delete" @click="uninstallVPNGate" :loading="vpngateModal.confirmLoading">移除</a-button>
@@ -94,17 +98,17 @@
                         </a-select-option>
                     </a-select>
                 </div>
-                <a-tag color="green" :style="{ marginBottom: '8px' }">[[ selectedServers.length ]] 个可用节点</a-tag>
+                <a-tag color="green" :style="{ marginBottom: '8px' }">[[ selectedServers.length ]] 个候选节点</a-tag>
                 <div class="vpngate-table-wrap">
                     <table class="vpngate-table">
                         <thead>
                             <tr>
-                                <th style="width: 60px; text-align: center;">收藏</th>
                                 <th>国家</th>
                                 <th>节点 IP</th>
                                 <th>ASN</th>
                                 <th>IP 类型</th>
                                 <th>延迟</th>
+                                <th style="width: 150px; text-align: right;">操作</th>
                             </tr>
                         </thead>
                         <tbody v-for="group in groupedServers" :key="group.countryLong">
@@ -114,8 +118,7 @@
                                     <div class="vpngate-country-row">
                                         <div class="vpngate-country-name">
                                             <a-icon :type="isCountryCollapsed(group.countryLong) ? 'right' : 'down'"></a-icon>
-                                            <a-icon v-if="group.isFavorites" type="star" theme="filled" :style="{ color: '#fadb14' }"></a-icon>
-                                            <img v-else class="vpngate-flag" :src="'https://flagcdn.com/24x18/' + group.countryShortLower + '.png'" :alt="group.countryShort">
+                                            <img class="vpngate-flag" :src="'https://flagcdn.com/24x18/' + group.countryShortLower + '.png'" :alt="group.countryShort">
                                             <span>[[ group.countryLong ]]</span>
                                         </div>
                                         <a-tag color="cyan">[[ group.servers.length ]]</a-tag>
@@ -124,11 +127,6 @@
                             </tr>
                             <template v-if="!isCountryCollapsed(group.countryLong)">
                                 <tr v-for="server in group.servers" :key="group.countryLong + server.hostName + server.ip" :style="{ opacity: server.localPing < 0 ? 0.45 : 1 }">
-                                    <td style="text-align: center;">
-                                        <a-icon type="star" :theme="isFavorited(server) ? 'filled' : 'outlined'"
-                                            :style="{ cursor: 'pointer', color: isFavorited(server) ? '#fadb14' : 'rgba(255, 255, 255, 0.4)', fontSize: '16px' }"
-                                            @click.stop="toggleFavorite(server)"></a-icon>
-                                    </td>
                                     <td>
                                         <span class="vpngate-country">
                                             <img class="vpngate-flag" :src="'https://flagcdn.com/24x18/' + server.countryShortLower + '.png'" :alt="server.countryShort">
@@ -144,8 +142,18 @@
                                     </td>
                                     <td>
                                         <span :class="pingClass(server.localPing)">
-                                                [[ server.localPing < 0 ? '超时' : server.localPing + ' ms' ]]
+                                                [[ formatPing(server.localPing) ]]
                                         </span>
+                                    </td>
+                                    <td style="text-align: right;">
+                                        <a-space>
+                                            <a-button size="small" icon="thunderbolt" :loading="isTestingServer(server)" :disabled="connectBusy || !!testingNodeKey"
+                                                @click.stop="testServer(server)">测试</a-button>
+                                            <a-button v-if="isServerBusy(server)" size="small" type="danger" icon="close"
+                                                @click.stop="cancelConnect">取消</a-button>
+                                            <a-button v-else size="small" type="primary" icon="api" :disabled="connectBusy || server.localPing < 0"
+                                                @click.stop="connectServer(server)">连接</a-button>
+                                        </a-space>
                                     </td>
                                 </tr>
                             </template>
@@ -164,10 +172,10 @@
         servers: [],
         ruleMode: 'default',
         selectedCountries: [],
-        favorites: [],
         refreshInterval: 120,
         fallbackEnable: true,
         showUnavailable: false,
+        testingNodeKey: '',
         collapsedCountries: {},
         connectStatus: {
             phase: 'idle',
@@ -218,12 +226,6 @@
                 if (vpngateModal.ruleMode === 'default') {
                     return vpngateModal.servers.filter(server => server.localPing >= 0);
                 }
-                if (vpngateModal.ruleMode === 'favorite') {
-                    if (vpngateModal.favorites.length === 0) {
-                        return [];
-                    }
-                    return vpngateModal.servers.filter(server => this.isFavorited(server) && server.localPing >= 0);
-                }
                 if (vpngateModal.selectedCountries.length === 0) {
                     return [];
                 }
@@ -247,9 +249,6 @@
                 if (vpngateModal.ruleMode === 'fixed' && vpngateModal.selectedCountries.length === 0) {
                     return '国家连接需要先选择国家/地区';
                 }
-                if (vpngateModal.ruleMode === 'favorite' && vpngateModal.favorites.length === 0) {
-                    return '收藏连接需要先星标至少一个节点';
-                }
                 return '当前连接方式没有可用节点';
             },
             addOutboundDisabledReason() {
@@ -261,7 +260,6 @@
                 return {
                     default: '自动连接',
                     fixed: '国家连接',
-                    favorite: '收藏连接',
                 }[vpngateModal.ruleMode];
             },
             statusName() {
@@ -322,16 +320,6 @@
                 });
                 
                 const result = Object.values(groups);
-                const favorites = vpngateModal.servers.filter(server => this.isFavorited(server));
-                if (favorites.length > 0) {
-                    result.unshift({
-                        countryLong: '我的收藏',
-                        countryShort: '',
-                        countryShortLower: '',
-                        isFavorites: true,
-                        servers: favorites,
-                    });
-                }
                 result.forEach(group => {
                     group.servers.sort((a, b) => {
                         const pa = a.localPing < 0 ? 999999 : a.localPing;
@@ -343,8 +331,6 @@
                     group.priority = this.countryPriority(group);
                 });
                 return result.sort((a, b) => {
-                    if (a.isFavorites) return -1;
-                    if (b.isFavorites) return 1;
                     return (a.priority - b.priority) || (a.bestPing - b.bestPing);
                 });
             },
@@ -376,9 +362,15 @@
             },
             pingClass(ping) {
                 if (ping < 0) return 'vpngate-ping-slow';
+                if (ping >= 999999) return 'vpngate-ping-slow';
                 if (ping < 50) return 'vpngate-ping-fast';
                 if (ping < 150) return 'vpngate-ping-medium';
                 return 'vpngate-ping-slow';
+            },
+            formatPing(ping) {
+                if (ping < 0) return '超时';
+                if (ping >= 999999) return '未测';
+                return ping + ' ms';
             },
             pingRank(ping) {
                 return ping < 0 ? Number.MAX_SAFE_INTEGER : ping;
@@ -387,9 +379,6 @@
                 if (vpngateModal.ruleMode === 'fixed') {
                     return vpngateModal.selectedCountries.includes(group.countryShort) ? 0 : 1;
                 }
-                if (vpngateModal.ruleMode === 'favorite') {
-                    return group.servers.some(server => this.isFavorited(server)) ? 0 : 1;
-                }
                 return 0;
             },
             resetCollapsedCountries() {
@@ -397,12 +386,6 @@
                 if (vpngateModal.ruleMode === 'fixed') {
                     vpngateModal.servers.forEach(server => {
                         if (vpngateModal.selectedCountries.includes(server.countryShort)) {
-                            openCountries.add(server.countryLong);
-                        }
-                    });
-                } else if (vpngateModal.ruleMode === 'favorite') {
-                    vpngateModal.servers.forEach(server => {
-                        if (this.isFavorited(server)) {
                             openCountries.add(server.countryLong);
                         }
                     });
@@ -479,10 +462,13 @@
                 }
             },
             async addOutbound() {
-                if (!this.bestServer) return;
+                return this.connectServer(this.bestServer);
+            },
+            async connectServer(server) {
+                if (!server) return;
                 vpngateModal.loading(true);
                 const msg = await HttpUtil.post('/panel/xray/vpngate/start', {
-                    server: JSON.stringify(this.bestServer),
+                    server: JSON.stringify(server),
                     ruleMode: vpngateModal.ruleMode,
                     selectedCountries: JSON.stringify(vpngateModal.selectedCountries),
                     fallbackEnable: vpngateModal.fallbackEnable,
@@ -493,6 +479,26 @@
                     this.startStatusTimer();
                 } else {
                     Vue.prototype.$message.error('VPNGate 启动连接请求失败');
+                }
+            },
+            async testServer(server) {
+                if (!server || vpngateModal.testingNodeKey) return;
+                const key = this.serverKey(server);
+                vpngateModal.testingNodeKey = key;
+                try {
+                    const msg = await HttpUtil.post('/panel/xray/vpngate/test', {
+                        server: JSON.stringify(server),
+                    });
+                    if (!msg.success || !msg.obj || !msg.obj.success) {
+                        Vue.prototype.$message.error('节点不可用');
+                        return;
+                    }
+                    server.localPing = msg.obj.delay;
+                    Vue.prototype.$message.success(`节点可用，连接耗时 ${msg.obj.delay}ms`);
+                } catch (error) {
+                    Vue.prototype.$message.error('节点测试失败');
+                } finally {
+                    vpngateModal.testingNodeKey = '';
                 }
             },
             confirmUseAllNodes() {
@@ -588,9 +594,11 @@
             async loadVPNGateSettings() {
                 const msg = await HttpUtil.post('/panel/xray/vpngate/get_settings');
                 if (msg.success && msg.obj) {
-                    vpngateModal.favorites = msg.obj.favorites || [];
                     vpngateModal.refreshInterval = msg.obj.refreshInterval || 120;
                     vpngateModal.ruleMode = msg.obj.ruleMode || 'default';
+                    if (!['default', 'fixed'].includes(vpngateModal.ruleMode)) {
+                        vpngateModal.ruleMode = 'default';
+                    }
                     vpngateModal.selectedCountries = msg.obj.selectedCountries || [];
                     vpngateModal.fallbackEnable = msg.obj.fallbackEnable !== false;
                 }
@@ -598,7 +606,6 @@
             settingsPayload() {
                 return {
                     refreshInterval: vpngateModal.refreshInterval,
-                    favorites: JSON.stringify(vpngateModal.favorites),
                     ruleMode: vpngateModal.ruleMode,
                     selectedCountries: JSON.stringify(vpngateModal.selectedCountries),
                     fallbackEnable: vpngateModal.fallbackEnable,
@@ -614,27 +621,14 @@
                     Vue.prototype.$message.error('保存设置失败');
                 }
             },
-            // Star favorites helper
-            isFavorited(server) {
-                return vpngateModal.favorites.includes(server.hostName);
+            serverKey(server) {
+                return `${server.hostName}:${server.ip}`;
             },
-            async toggleFavorite(server) {
-                const idx = vpngateModal.favorites.indexOf(server.hostName);
-                if (idx >= 0) {
-                    vpngateModal.favorites.splice(idx, 1);
-                } else {
-                    vpngateModal.favorites.push(server.hostName);
-                }
-                // Save immediately to settings database
-                const msg = await HttpUtil.post('/panel/xray/vpngate/save_settings', this.settingsPayload());
-                if (!msg.success) {
-                    Vue.prototype.$message.error('收藏同步失败');
-                    if (idx >= 0) {
-                        vpngateModal.favorites.splice(idx, 0, server.hostName);
-                    } else {
-                        vpngateModal.favorites = vpngateModal.favorites.filter(host => host !== server.hostName);
-                    }
-                }
+            isTestingServer(server) {
+                return vpngateModal.testingNodeKey === this.serverKey(server);
+            },
+            isServerBusy(server) {
+                return this.connectBusy && vpngateModal.connectStatus.server && vpngateModal.connectStatus.server.ip === server.ip;
             },
             // Accordion fold toggles
             toggleCountryCollapse(country) {

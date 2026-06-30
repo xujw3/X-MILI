@@ -2,7 +2,15 @@
 <a-modal id="warp-modal" v-model="warpModal.visible" title="Cloudflare WARP" :confirm-loading="warpModal.confirmLoading"
     :closable="true" :mask-closable="true" :footer="null" :class="themeSwitcher.currentTheme">
     <template v-if="ObjectUtil.isEmpty(warpModal.warpData)">
-        <a-button icon="api" @click="register" :loading="warpModal.confirmLoading">{{ i18n "create" }}</a-button>
+        <a-button icon="api" @click="register" :loading="warpModal.confirmLoading">申请并测试 WARP</a-button>
+        <div v-if="testStatus" :style="{ marginTop: '10px' }">
+            <a-alert v-if="testStatus==='success'" type="success" show-icon
+                :message="`WARP 可用，延迟 ${testDelay}ms`"></a-alert>
+            <a-alert v-else-if="testStatus==='failed'" type="error" show-icon
+                :message="testError || '连续申请 10 次仍不可用，请稍后再试'"></a-alert>
+            <a-alert v-else type="info" show-icon
+                :message="attempt ? `第 ${attempt}/10 次：${testStatus==='testing' ? '正在测试连通性' : '正在申请节点'}` : '正在测试连通性'"></a-alert>
+        </div>
     </template>
     <template v-else>
         <table :style="{ margin: '5px 0', width: '100%' }">
@@ -23,7 +31,16 @@
                 <td>[[ warpModal.warpData.private_key ]]</td>
             </tr>
         </table>
+        <a-button @click="register" :loading="warpModal.confirmLoading" type="primary">重新申请并测试</a-button>
         <a-button @click="delConfig" :loading="warpModal.confirmLoading" type="danger">{{ i18n "delete" }}</a-button>
+        <div v-if="testStatus" :style="{ marginTop: '10px' }">
+            <a-alert v-if="testStatus==='success'" type="success" show-icon
+                :message="`WARP 可用，延迟 ${testDelay}ms`"></a-alert>
+            <a-alert v-else-if="testStatus==='failed'" type="error" show-icon
+                :message="testError || 'WARP 当前不可用'"></a-alert>
+            <a-alert v-else type="info" show-icon
+                :message="attempt ? `第 ${attempt}/10 次：${testStatus==='testing' ? '正在测试连通性' : '正在申请节点'}` : '正在测试连通性'"></a-alert>
+        </div>
         <a-divider :style="{ margin: '0' }">{{ i18n "pages.xray.outbound.settings" }}</a-divider>
         <a-collapse :style="{ margin: '10px 0' }">
             <a-collapse-panel header='WARP/WARP+ License Key'>
@@ -80,15 +97,14 @@
             <a-form :label-col="{ md: {span:8} }" :wrapper-col="{ md: {span:14} }">
                 <template v-if="warpOutboundIndex>=0">
                     <a-tag color="green" :style="{ lineHeight: '31px' }">{{ i18n "enabled" }}</a-tag>
-                    <a-button @click="resetOutbound" :loading="warpModal.confirmLoading"
+                    <a-button @click="resetOutbound" :loading="warpModal.confirmLoading" :disabled="!warpReady"
                         type="danger">{{ i18n "reset" }}</a-button>
                 </template>
                 <template v-else>
                     <a-tag color="orange" :style="{ lineHeight: '31px' }">{{ i18n "disabled" }}</a-tag>
-                    <a-button @click="addOutbound" :loading="warpModal.confirmLoading"
+                    <a-button @click="addOutbound" :loading="warpModal.confirmLoading" :disabled="!warpReady"
                         type="primary">{{ i18n "pages.xray.outbound.addOutbound" }}</a-button>
                 </template>
-                </a-form-item>
             </a-form>
         </template>
     </template>
@@ -128,29 +144,32 @@
         data: {
             warpModal: warpModal,
             warpPlus: '',
+            attempt: 0,
+            testDelay: 0,
+            testError: '',
+            testStatus: '',
         },
         methods: {
             collectConfig() {
-                config = warpModal.warpConfig.config;
-                peer = config.peers[0];
-                if (config) {
-                    warpModal.warpOutbound = Outbound.fromJson({
-                        tag: 'warp',
-                        protocol: Protocols.Wireguard,
-                        settings: {
-                            mtu: 1420,
-                            secretKey: warpModal.warpData.private_key,
-                            address: this.getAddresses(config.interface.addresses),
-                            reserved: this.getResolved(config.client_id),
-                            domainStrategy: 'ForceIP',
-                            peers: [{
-                                publicKey: peer.public_key,
-                                endpoint: peer.endpoint.host,
-                            }],
-                            noKernelTun: false,
-                        }
-                    });
-                }
+                const config = warpModal.warpConfig.config;
+                if (!config || !config.peers || !config.peers.length) return;
+                const peer = config.peers[0];
+                warpModal.warpOutbound = Outbound.fromJson({
+                    tag: 'warp',
+                    protocol: Protocols.Wireguard,
+                    settings: {
+                        mtu: 1420,
+                        secretKey: warpModal.warpData.private_key,
+                        address: this.getAddresses(config.interface.addresses),
+                        reserved: this.getResolved(config.client_id),
+                        domainStrategy: 'ForceIP',
+                        peers: [{
+                            publicKey: peer.public_key,
+                            endpoint: peer.endpoint.host,
+                        }],
+                        noKernelTun: false,
+                    }
+                });
             },
             getAddresses(addrs) {
                 let addresses = [];
@@ -174,17 +193,72 @@
                 }
                 return reserved;
             },
+            resetTestState() {
+                this.attempt = 0;
+                this.testDelay = 0;
+                this.testError = '';
+                this.testStatus = '';
+                warpModal.warpOutbound = null;
+            },
+            async testWarpOutbound() {
+                const candidate = warpModal.warpOutbound.toJson();
+                const outbounds = (app.templateSettings.outbounds || []).filter((o) => o.tag !== 'warp');
+                outbounds.push(candidate);
+                const msg = await HttpUtil.post('/panel/xray/testOutbound', {
+                    outbound: JSON.stringify(candidate),
+                    allOutbounds: JSON.stringify(outbounds)
+                });
+                if (!msg.success || !msg.obj) {
+                    return { success: false, error: msg.msg || 'WARP 测试失败' };
+                }
+                return msg.obj;
+            },
             async register() {
                 warpModal.loading(true);
-                const keys = Wireguard.generateKeypair();
-                const msg = await HttpUtil.post('/panel/xray/warp/reg', keys);
-                if (msg.success) {
-                    const resp = JSON.parse(msg.obj);
-                    warpModal.warpData = resp.data;
-                    warpModal.warpConfig = resp.config;
-                    this.collectConfig();
+                this.resetTestState();
+                try {
+                    for (let i = 1; i <= 10; i++) {
+                        this.attempt = i;
+                        this.testStatus = 'registering';
+                        const keys = Wireguard.generateKeypair();
+                        const msg = await HttpUtil.post('/panel/xray/warp/reg', keys);
+                        if (!msg.success) {
+                            this.testError = msg.msg || 'WARP 申请失败';
+                            continue;
+                        }
+                        const resp = JSON.parse(msg.obj);
+                        warpModal.warpData = resp.data;
+                        warpModal.warpConfig = resp.config;
+                        this.collectConfig();
+                        if (!warpModal.warpOutbound) {
+                            this.testError = 'WARP 配置无效';
+                            continue;
+                        }
+
+                        this.testStatus = 'testing';
+                        const result = await this.testWarpOutbound();
+                        if (result.success) {
+                            this.testDelay = result.delay;
+                            this.testStatus = 'success';
+                            Vue.prototype.$message.success(`WARP 可用，延迟 ${result.delay}ms`);
+                            return;
+                        }
+                        this.testError = result.error || 'WARP 节点不可用';
+                    }
+                    await HttpUtil.post('/panel/xray/warp/del');
+                    warpModal.warpData = null;
+                    warpModal.warpConfig = null;
+                    warpModal.warpOutbound = null;
+                    this.testStatus = 'failed';
+                    this.testError = '连续申请 10 次仍不可用，请稍后再试';
+                    Vue.prototype.$message.error(this.testError);
+                } catch (error) {
+                    this.testStatus = 'failed';
+                    this.testError = error.message || 'WARP 申请或测试失败';
+                    Vue.prototype.$message.error(this.testError);
+                } finally {
+                    warpModal.loading(false);
                 }
-                warpModal.loading(false);
             },
             async updateLicense(l) {
                 warpModal.loading(true);
@@ -200,11 +274,33 @@
             },
             async getConfig() {
                 warpModal.loading(true);
-                const msg = await HttpUtil.post('/panel/xray/warp/config');
-                warpModal.loading(false);
-                if (msg.success) {
-                    warpModal.warpConfig = JSON.parse(msg.obj);
-                    this.collectConfig();
+                this.resetTestState();
+                try {
+                    const msg = await HttpUtil.post('/panel/xray/warp/config');
+                    if (msg.success) {
+                        warpModal.warpConfig = JSON.parse(msg.obj);
+                        this.collectConfig();
+                        if (!warpModal.warpOutbound) {
+                            this.testError = 'WARP 配置无效';
+                            this.testStatus = 'failed';
+                            return;
+                        }
+                        this.testStatus = 'testing';
+                        const result = await this.testWarpOutbound();
+                        if (result.success) {
+                            this.testDelay = result.delay;
+                            this.testError = '';
+                            this.testStatus = 'success';
+                        } else {
+                            this.testError = result.error || 'WARP 当前不可用';
+                            this.testStatus = 'failed';
+                        }
+                    }
+                } catch (error) {
+                    this.testError = error.message || 'WARP 测试失败';
+                    this.testStatus = 'failed';
+                } finally {
+                    warpModal.loading(false);
                 }
             },
             async delConfig() {
@@ -214,6 +310,7 @@
                 if (msg.success) {
                     warpModal.warpData = null;
                     warpModal.warpConfig = null;
+                    this.resetTestState();
                     this.delOutbound();
                 }
             },
@@ -240,6 +337,11 @@
                 get: function() {
                     return app.templateSettings ? app.templateSettings.outbounds.findIndex((o) => o.tag ==
                         'warp') : -1;
+                }
+            },
+            warpReady: {
+                get: function() {
+                    return !!warpModal.warpOutbound && this.testStatus === 'success';
                 }
             }
         }

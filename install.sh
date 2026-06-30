@@ -18,6 +18,7 @@ plain='\033[0m'
 log() { echo -e "${green}[X-MILI]${plain} $*"; }
 warn() { echo -e "${yellow}[X-MILI]${plain} $*"; }
 fail() { echo -e "${red}[X-MILI]${plain} $*" >&2; exit 1; }
+step() { echo -e "${green}[X-MILI]${plain} ${yellow}[$1/$2]${plain} $3"; }
 
 [[ $EUID -ne 0 ]] && fail "请使用 root 运行 / Please run as root"
 
@@ -36,15 +37,21 @@ choose_language() {
 is_zh() { [[ "$X_MILI_LANG" == "zh_CN" ]]; }
 
 install_deps() {
+    is_zh && log "正在安装基础依赖和 OpenVPN，包管理器可能需要几分钟..." || log "Installing base dependencies and OpenVPN. Package manager may take a few minutes..."
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update
-        apt-get install -y ca-certificates curl tar gzip unzip gcc g++ make openssl
+        apt-get install -y ca-certificates curl tar gzip unzip gcc g++ make openssl openvpn
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl
+        dnf install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl openvpn
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl
+        yum install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl openvpn
     elif command -v apk >/dev/null 2>&1; then
-        apk add --no-cache ca-certificates curl tar gzip unzip build-base openssl
+        apk add --no-cache ca-certificates curl tar gzip unzip build-base openssl openvpn
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -Sy --noconfirm ca-certificates curl tar gzip unzip gcc make openssl openvpn
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper refresh
+        zypper -q install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl openvpn
     else
         fail "Unsupported package manager / 不支持的包管理器"
     fi
@@ -74,8 +81,9 @@ install_go() {
     local go_arch
     go_arch=$(detect_go_arch)
     local url="https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz"
-    log "Installing Go ${GO_VERSION}"
+    is_zh && log "正在下载 Go ${GO_VERSION} (${go_arch})..." || log "Downloading Go ${GO_VERSION} (${go_arch})..."
     curl -fL "$url" -o /tmp/x-mili-go.tar.gz
+    is_zh && log "正在安装 Go 运行环境..." || log "Installing Go runtime..."
     rm -rf /usr/local/go
     tar -C /usr/local -xzf /tmp/x-mili-go.tar.gz
     rm -f /tmp/x-mili-go.tar.gz
@@ -128,9 +136,9 @@ read_panel_port() {
     local current_port="${1:-2053}"
     while true; do
         if is_zh; then
-            read -rp "请设置面板端口 [默认 ${current_port}]: " panel_port
+            read -rp "请设置登录面板的端口 [默认 ${current_port}]: " panel_port
         else
-            read -rp "Please set panel port [default ${current_port}]: " panel_port
+            read -rp "Panel port [default ${current_port}]: " panel_port
         fi
         panel_port="${panel_port:-$current_port}"
         if [[ "$panel_port" =~ ^[0-9]+$ ]] && ((panel_port >= 1 && panel_port <= 65535)); then
@@ -154,15 +162,15 @@ read_initial_panel_settings() {
     if [[ -t 0 ]]; then
         echo ""
         if is_zh; then
-            echo -e "${green}请设置初始面板信息，直接回车则随机生成。${plain}"
-            read -rp "用户名 [随机]: " panel_username
-            read -rp "密码 [随机]: " panel_password
-            read -rp "访问路径 [随机]: " panel_web_path
+            echo -e "${green}首次安装向导：请设置面板登录信息。直接回车将随机生成，更安全。${plain}"
+            read -rp "请设置登录面板的账号 [随机]: " panel_username
+            read -rp "请设置登录面板的安全后缀 [随机，例如 /$(gen_random_string 8)/]: " panel_web_path
+            read -rp "请设置登录面板的密码 [随机]: " panel_password
         else
-            echo -e "${green}Set initial panel info. Press Enter to generate random values.${plain}"
-            read -rp "Username [random]: " panel_username
-            read -rp "Password [random]: " panel_password
-            read -rp "Web base path [random]: " panel_web_path
+            echo -e "${green}First-time setup: configure panel login. Press Enter to generate secure random values.${plain}"
+            read -rp "Panel username [random]: " panel_username
+            read -rp "Panel secure URL suffix [random, e.g. /$(gen_random_string 8)/]: " panel_web_path
+            read -rp "Panel password [random]: " panel_password
         fi
         if [[ -z "${X_MILI_PANEL_PORT:-}" ]]; then
             read_panel_port "$current_port"
@@ -172,6 +180,7 @@ read_initial_panel_settings() {
     panel_username="${panel_username:-$(gen_random_string 10)}"
     panel_password="${panel_password:-$(gen_random_string 18)}"
     panel_web_path="${panel_web_path:-$(gen_random_string 18)}"
+    panel_web_path=$(normalize_web_path "$panel_web_path")
     panel_port="${panel_port:-$current_port}"
 }
 
@@ -215,10 +224,11 @@ print_install_guide() {
     if is_zh; then
         echo -e "${green}================ X-MILI 安装完成 ================${plain}"
         echo -e "管理命令: ${green}ml${plain}"
-        echo -e "访问地址: ${green}${protocol}://${server_ip}:${port}${web_path}${plain}"
+        echo -e "面板地址: ${green}${protocol}://${server_ip}:${port}${web_path}${plain}"
         if [[ "$panel_credentials_initialized" == "1" ]]; then
-            echo -e "用户名: ${green}${panel_username}${plain}"
-            echo -e "密码: ${green}${panel_password}${plain}"
+            echo -e "登录账号: ${green}${panel_username}${plain}"
+            echo -e "登录密码: ${green}${panel_password}${plain}"
+            echo -e "安全后缀: ${green}${web_path}${plain}"
         else
             echo -e "登录信息: ${yellow}已保留现有账号和密码${plain}"
         fi
@@ -231,6 +241,7 @@ print_install_guide() {
         if [[ "$panel_credentials_initialized" == "1" ]]; then
             echo -e "Username: ${green}${panel_username}${plain}"
             echo -e "Password: ${green}${panel_password}${plain}"
+            echo -e "Secure suffix: ${green}${web_path}${plain}"
         else
             echo -e "Login: ${yellow}existing username and password preserved${plain}"
         fi
@@ -268,28 +279,38 @@ choose_language
 is_zh && log "开始安装/更新 ${APP_NAME}" || log "Installing/updating ${APP_NAME}"
 
 command -v systemctl >/dev/null 2>&1 || fail "需要 systemd / systemd is required"
+is_zh && step 1 10 "检查并安装系统依赖、OpenVPN" || step 1 10 "Installing system dependencies and OpenVPN"
 install_deps
+is_zh && step 2 10 "下载并安装 Go 编译环境" || step 2 10 "Downloading and installing Go"
 install_go
+is_zh && step 3 10 "清理旧程序文件，保留面板数据" || step 3 10 "Cleaning old runtime files, keeping panel data"
 clean_old_runtime
 
 tmp_dir=$(mktemp -d -t x-mili-install.XXXXXX)
 trap 'rm -rf "$tmp_dir"' EXIT
 
-log "Downloading source: ${REPO}"
+is_zh && step 4 10 "下载 X-MILI 源码" || step 4 10 "Downloading X-MILI source"
+log "${REPO}"
 curl -fL "${REPO}/archive/refs/heads/main.tar.gz" -o "$tmp_dir/source.tar.gz"
 mkdir -p "$tmp_dir/src"
+is_zh && step 5 10 "解压源码" || step 5 10 "Extracting source"
 tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir/src" --strip-components=1
 
 cd "$tmp_dir/src"
+is_zh && step 6 10 "编译面板程序，低配机器可能需要一会儿" || step 6 10 "Building panel binary, this may take a while on small servers"
 /usr/local/go/bin/go build -ldflags "-w -s" -o build/x-ui main.go
 chmod +x DockerInit.sh
+is_zh && step 7 10 "准备 Xray 核心和运行文件" || step 7 10 "Preparing Xray core and runtime files"
 ./DockerInit.sh "$(detect_arch)"
 
+is_zh && step 8 10 "安装程序文件和 ml 管理命令" || step 8 10 "Installing program files and ml command"
 cp -r build/* "$INSTALL_DIR/"
 install -m 755 x-ui.sh /usr/bin/ml
 echo "$X_MILI_LANG" > "$LANG_FILE"
 
+is_zh && step 9 10 "配置面板账号、端口和安全后缀" || step 9 10 "Configuring panel login, port and secure suffix"
 init_panel_settings
+is_zh && step 10 10 "安装并启动系统服务" || step 10 10 "Installing and starting system service"
 install_service
 print_install_guide
 

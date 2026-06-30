@@ -187,9 +187,9 @@ delete_script() {
 
 uninstall() {
     if is_zh; then
-        confirm "确定要卸载面板吗？Xray 也会一起卸载！" "n"
+        confirm "确定要彻底卸载面板吗？面板数据、Xray、VPNGate/OpenVPN、证书和日志都会清理。" "n"
     else
-        confirm "Are you sure you want to uninstall the panel? xray will also uninstalled!" "n"
+        confirm "Fully uninstall the panel? Panel data, Xray, VPNGate/OpenVPN, certificates and logs will be removed." "n"
     fi
     if [[ $? != 0 ]]; then
         if [[ $# == 0 ]]; then
@@ -206,26 +206,32 @@ uninstall() {
         systemctl stop x-ui 2> /dev/null || true
         systemctl disable x-ui 2> /dev/null || true
         rm ${xui_service}/x-ui.service -f
+        rm /etc/systemd/system/x-ui.service -f
         systemctl daemon-reload
         systemctl reset-failed
     fi
 
-    # Kill running openvpn and xray instances
+    # Kill running panel, OpenVPN and Xray instances
+    pkill -9 x-ui 2>/dev/null || true
     pkill -9 openvpn 2>/dev/null || true
+    pkill -9 openvpn3 2>/dev/null || true
     pkill -9 xray 2>/dev/null || true
+    pkill -9 xray-linux 2>/dev/null || true
 
-    # Uninstall openvpn if installed
+    # Uninstall OpenVPN package installed for VPNGate
     if command -v apt-get >/dev/null 2>&1; then
-        apt-get purge -y openvpn >/dev/null 2>&1 || true
+        apt-get purge -y openvpn openvpn3 >/dev/null 2>&1 || true
         apt-get autoremove -y >/dev/null 2>&1 || true
     elif command -v dnf >/dev/null 2>&1; then
-        dnf remove -y openvpn >/dev/null 2>&1 || true
+        dnf remove -y openvpn openvpn3 >/dev/null 2>&1 || true
     elif command -v yum >/dev/null 2>&1; then
-        yum remove -y openvpn >/dev/null 2>&1 || true
+        yum remove -y openvpn openvpn3 >/dev/null 2>&1 || true
     elif command -v apk >/dev/null 2>&1; then
-        apk del openvpn >/dev/null 2>&1 || true
+        apk del openvpn openvpn3 >/dev/null 2>&1 || true
     elif command -v pacman >/dev/null 2>&1; then
-        pacman -Rns --noconfirm openvpn >/dev/null 2>&1 || true
+        pacman -Rns --noconfirm openvpn openvpn3 >/dev/null 2>&1 || true
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper -q remove -y openvpn openvpn3 >/dev/null 2>&1 || true
     fi
 
     rm /etc/x-ui/ -rf
@@ -234,6 +240,7 @@ uninstall() {
     rm /root/cert/ -rf
     rm /root/.acme.sh/ -rf
     rm ${xui_folder}/ -rf
+    rm -rf /usr/local/etc/x-ui /var/lib/x-ui /tmp/x-mili-* /tmp/vpngate-check-*.ovpn
 
     if [ -d "/etc/fail2ban" ]; then
         rm -f /etc/fail2ban/filter.d/3x-ipl.conf

@@ -153,6 +153,7 @@ func (a *XraySettingController) warp(c *gin.Context) {
 }
 
 func (a *XraySettingController) vpngateList(c *gin.Context) {
+	a.OpenVPNService.PrepareVPNGateOpenVPN()
 	servers, err := a.VPNGateService.ListServersWithUnavailable(c.PostForm("refresh") == "true", c.PostForm("showUnavailable") == "true")
 	jsonObj(c, servers, err)
 }
@@ -173,17 +174,18 @@ func (a *XraySettingController) vpngate(c *gin.Context) {
 			fallbackEnable := c.PostForm("fallbackEnable") == "true"
 			resp, err = a.OpenVPNService.StartVPNGate(server, ruleMode, selectedCountries, fallbackEnable)
 		}
+	case "test":
+		var server service.VPNGateServer
+		err = json.Unmarshal([]byte(c.PostForm("server")), &server)
+		if err == nil {
+			ok, latency := service.TestVPNGateOpenVPN(server)
+			resp = map[string]any{"success": ok, "delay": latency}
+		}
 	case "get_settings":
 		interval, errVal := a.SettingService.GetVPNGateRefreshInterval()
 		if errVal != nil {
 			interval = 120
 		}
-		favStr, errVal := a.SettingService.GetVPNGateFavorites()
-		if errVal != nil {
-			favStr = "[]"
-		}
-		var favorites []string
-		_ = json.Unmarshal([]byte(favStr), &favorites)
 		ruleMode, errVal := a.SettingService.GetVPNGateRuleMode()
 		if errVal != nil || !isValidVPNGateRuleMode(ruleMode) {
 			ruleMode = "default"
@@ -199,7 +201,6 @@ func (a *XraySettingController) vpngate(c *gin.Context) {
 			fallbackEnable = true
 		}
 		resp = map[string]any{
-			"favorites":         favorites,
 			"refreshInterval":   interval,
 			"ruleMode":          ruleMode,
 			"selectedCountries": selectedCountries,
@@ -212,15 +213,6 @@ func (a *XraySettingController) vpngate(c *gin.Context) {
 				interval = 120
 			}
 			err = a.SettingService.SetVPNGateRefreshInterval(interval)
-		}
-		if err == nil {
-			if favoritesStr, ok := c.GetPostForm("favorites"); ok {
-				var favorites []string
-				if errVal := json.Unmarshal([]byte(favoritesStr), &favorites); errVal != nil {
-					favoritesStr = "[]"
-				}
-				err = a.SettingService.SetVPNGateFavorites(favoritesStr)
-			}
 		}
 		if err == nil {
 			if ruleMode, ok := c.GetPostForm("ruleMode"); ok {
@@ -269,7 +261,7 @@ func (a *XraySettingController) vpngate(c *gin.Context) {
 }
 
 func isValidVPNGateRuleMode(ruleMode string) bool {
-	return ruleMode == "default" || ruleMode == "fixed" || ruleMode == "favorite"
+	return ruleMode == "default" || ruleMode == "fixed"
 }
 
 // getOutboundsTraffic retrieves the traffic statistics for outbounds.

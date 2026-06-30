@@ -53,7 +53,7 @@ func (s *WarpService) GetWarpConfig() (string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+warpData["access_token"])
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -83,7 +83,7 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 	req.Header.Add("CF-Client-Version", "a-7.21-0721")
 	req.Header.Add("Content-Type", "application/json")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -101,12 +101,22 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 		return "", err
 	}
 
-	deviceId := rspData["id"].(string)
-	token := rspData["token"].(string)
-	license, ok := rspData["account"].(map[string]any)["license"].(string)
+	deviceId, ok := rspData["id"].(string)
+	if !ok || deviceId == "" {
+		return "", common.NewError("invalid WARP response: missing device id")
+	}
+	token, ok := rspData["token"].(string)
+	if !ok || token == "" {
+		return "", common.NewError("invalid WARP response: missing token")
+	}
+	account, ok := rspData["account"].(map[string]any)
+	if !ok {
+		return "", common.NewError("invalid WARP response: missing account")
+	}
+	license, ok := account["license"].(string)
 	if !ok {
 		logger.Debug("Error accessing license value.")
-		return "", err
+		return "", common.NewError("invalid WARP response: missing license")
 	}
 
 	warpData := fmt.Sprintf("{\n  \"access_token\": \"%s\",\n  \"device_id\": \"%s\",", token, deviceId)
@@ -139,7 +149,7 @@ func (s *WarpService) SetWarpLicense(license string) (string, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+warpData["access_token"])
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
