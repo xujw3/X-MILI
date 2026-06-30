@@ -164,16 +164,19 @@ read_initial_panel_settings() {
         if is_zh; then
             echo -e "${green}首次安装向导：请设置面板登录信息。直接回车将随机生成，更安全。${plain}"
             read -rp "请设置登录面板的账号 [随机]: " panel_username
-            read -rp "请设置登录面板的安全后缀 [随机，例如 /$(gen_random_string 8)/]: " panel_web_path
             read -rp "请设置登录面板的密码 [随机]: " panel_password
+            if [[ -z "${X_MILI_PANEL_PORT:-}" ]]; then
+                read_panel_port "$current_port"
+            fi
+            read -rp "请设置登录面板的安全后缀 [随机，例如 /$(gen_random_string 8)/]: " panel_web_path
         else
             echo -e "${green}First-time setup: configure panel login. Press Enter to generate secure random values.${plain}"
             read -rp "Panel username [random]: " panel_username
-            read -rp "Panel secure URL suffix [random, e.g. /$(gen_random_string 8)/]: " panel_web_path
             read -rp "Panel password [random]: " panel_password
-        fi
-        if [[ -z "${X_MILI_PANEL_PORT:-}" ]]; then
-            read_panel_port "$current_port"
+            if [[ -z "${X_MILI_PANEL_PORT:-}" ]]; then
+                read_panel_port "$current_port"
+            fi
+            read -rp "Panel secure URL suffix [random, e.g. /$(gen_random_string 8)/]: " panel_web_path
         fi
     fi
 

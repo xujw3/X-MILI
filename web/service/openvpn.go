@@ -161,7 +161,6 @@ func (s *OpenVPNService) PrepareVPNGateOpenVPN() {
 
 func (s *OpenVPNService) CancelVPNGate() OpenVPNStatus {
 	vpnGateOpenVPN.Lock()
-	defer vpnGateOpenVPN.Unlock()
 	vpnGateOpenVPN.stopLocked()
 	vpnGateOpenVPN.status.Phase = "canceled"
 	vpnGateOpenVPN.status.Progress = 0
@@ -170,7 +169,12 @@ func (s *OpenVPNService) CancelVPNGate() OpenVPNStatus {
 	vpnGateOpenVPN.status.TunIP = ""
 	vpnGateOpenVPN.status.TunDev = ""
 	vpnGateOpenVPN.status.Outbound = nil
-	return cloneOpenVPNStatus(vpnGateOpenVPN.status)
+	status := cloneOpenVPNStatus(vpnGateOpenVPN.status)
+	vpnGateOpenVPN.Unlock()
+	if err := removeXrayVPNGateOutbound(); err != nil {
+		logger.Warningf("[VPNGate] Failed to remove outbound on cancel: %v", err)
+	}
+	return status
 }
 
 func (s *OpenVPNService) StopVPNGate() OpenVPNStatus {
@@ -545,8 +549,8 @@ func (t *openVPNTask) setTask(taskID int64, phase string, progress int, message 
 
 func (t *openVPNTask) fail(taskID int64, message string) {
 	t.Lock()
-	defer t.Unlock()
 	if t.id != taskID || t.status.Phase == "canceled" {
+		t.Unlock()
 		return
 	}
 	t.stopLocked()
@@ -557,6 +561,10 @@ func (t *openVPNTask) fail(taskID int64, message string) {
 	t.status.Outbound = nil
 	t.status.TunIP = ""
 	t.status.TunDev = ""
+	t.Unlock()
+	if err := removeXrayVPNGateOutbound(); err != nil {
+		logger.Warningf("[VPNGate] Failed to remove outbound on failure: %v", err)
+	}
 }
 
 func handleVPNGateNodeFailure(taskID int64, server VPNGateServer, message string) {
@@ -932,14 +940,19 @@ func removeXrayVPNGateOutbound() error {
 	}
 
 	filtered := make([]any, 0, len(outbounds))
+	removed := false
 	for _, o := range outbounds {
 		oMap, ok := o.(map[string]any)
 		if ok {
 			if tag, ok := oMap["tag"].(string); ok && tag == vpnGateOutboundTag {
+				removed = true
 				continue
 			}
 		}
 		filtered = append(filtered, o)
+	}
+	if !removed {
+		return nil
 	}
 	configMap["outbounds"] = filtered
 

@@ -2,14 +2,7 @@
 <a-modal id="vpngate-modal" v-model="vpngateModal.visible" title="VPNGate" :confirm-loading="vpngateModal.confirmLoading"
     :closable="true" :mask-closable="true" :footer="null" :class="themeSwitcher.currentTheme" width="760px">
     
-    <template v-if="vpngateModal.servers.length === 0">
-        <div :style="{ textAlign: 'center', padding: '32px 0' }">
-            <a-button type="primary" icon="api" size="large" @click="connectVPNGate" :loading="vpngateModal.confirmLoading">连接 VPNGate</a-button>
-        </div>
-    </template>
-    
-    <template v-else>
-        <!-- Top Toolbar & Current Connection Panel -->
+    <!-- Top Toolbar & Current Connection Panel -->
         <div class="vpngate-top">
             <div class="vpngate-header-row" :style="{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }">
                 <div class="vpngate-header-left">
@@ -19,7 +12,7 @@
                 </div>
                 <div class="vpngate-header-right">
                     <a-button v-if="isConnected" type="danger" icon="disconnect" @click="disconnectVPNGate">断开</a-button>
-                    <a-button v-else type="primary" icon="api" @click="connectVPNGate" :loading="connectBusy || vpngateModal.confirmLoading" :disabled="connectBusy"
+                    <a-button v-else type="primary" icon="api" @click="connectVPNGate" :loading="connectBusy || vpngateModal.confirmLoading" :disabled="connectBusy || needsCountry"
                         :title="addOutboundDisabledReason">连接</a-button>
                 </div>
             </div>
@@ -64,8 +57,7 @@
             </div>
         </div>
 
-        <a-collapse :bordered="false" :style="{ marginTop: '12px' }">
-            <a-collapse-panel key="advanced" header="高级选项">
+        <div class="vpngate-panel">
                 <a-space :style="{ marginBottom: '12px', flexWrap: 'wrap' }">
                     <a-radio-group v-model="vpngateModal.ruleMode" button-style="solid" size="small" @change="onRuleModeChanged">
                         <a-radio-button value="default">自动</a-radio-button>
@@ -99,7 +91,9 @@
                     </a-select>
                 </div>
                 <a-tag color="green" :style="{ marginBottom: '8px' }">[[ selectedServers.length ]] 个候选节点</a-tag>
-                <div class="vpngate-table-wrap">
+                <a-alert v-if="vpngateModal.servers.length === 0" type="info" show-icon
+                    message="暂无节点，点击刷新获取节点" :style="{ marginTop: '8px' }"></a-alert>
+                <div v-else class="vpngate-table-wrap">
                     <table class="vpngate-table">
                         <thead>
                             <tr>
@@ -147,7 +141,7 @@
                                     </td>
                                     <td style="text-align: right;">
                                         <a-space>
-                                            <a-button size="small" icon="thunderbolt" :loading="isTestingServer(server)" :disabled="connectBusy || !!testingNodeKey"
+                                            <a-button size="small" icon="thunderbolt" :loading="isTestingServer(server)" :disabled="connectBusy || !!vpngateModal.testingNodeKey"
                                                 @click.stop="testServer(server)">测试</a-button>
                                             <a-button v-if="isServerBusy(server)" size="small" type="danger" icon="close"
                                                 @click.stop="cancelConnect">取消</a-button>
@@ -160,9 +154,7 @@
                         </tbody>
                     </table>
                 </div>
-            </a-collapse-panel>
-        </a-collapse>
-    </template>
+        </div>
 </a-modal>
 
 <script>
@@ -253,8 +245,12 @@
             },
             addOutboundDisabledReason() {
                 if (this.connectBusy) return 'VPNGate 正在连接中';
+                if (this.needsCountry) return '国家连接需要先选择国家/地区';
                 if (!this.bestServer) return this.emptySelectionHint;
                 return '';
+            },
+            needsCountry() {
+                return vpngateModal.ruleMode === 'fixed' && vpngateModal.selectedCountries.length === 0;
             },
             ruleName() {
                 return {
@@ -338,18 +334,28 @@
         methods: {
             async create(refresh = false) {
                 vpngateModal.loading(true);
-                const msg = await HttpUtil.post('/panel/xray/vpngate/list', {
-                    refresh: refresh ? 'true' : '',
-                    showUnavailable: vpngateModal.showUnavailable ? 'true' : '',
-                });
-                vpngateModal.loading(false);
-                if (msg.success) {
-                    vpngateModal.servers = msg.obj || [];
-                    this.resetCollapsedCountries();
+                try {
+                    const msg = await HttpUtil.post('/panel/xray/vpngate/list', {
+                        refresh: refresh ? 'true' : '',
+                        showUnavailable: vpngateModal.showUnavailable ? 'true' : '',
+                    });
+                    if (msg.success) {
+                        vpngateModal.servers = msg.obj || [];
+                        this.resetCollapsedCountries();
+                    }
+                    return msg.success;
+                } catch (error) {
+                    Vue.prototype.$message.error('VPNGate 节点获取失败');
+                    return false;
+                } finally {
+                    vpngateModal.loading(false);
                 }
-                return msg.success;
             },
             async connectVPNGate() {
+                if (this.needsCountry) {
+                    Vue.prototype.$message.warning(this.emptySelectionHint);
+                    return;
+                }
                 if (vpngateModal.servers.length === 0) {
                     const loaded = await this.create(false);
                     if (!loaded) return;
@@ -415,12 +421,17 @@
             },
             async initModal() {
                 await this.loadVPNGateSettings();
-                this.create();
+                await this.create();
                 this.refreshConnectStatus();
             },
             async refreshConnectStatus() {
-                const msg = await HttpUtil.post('/panel/xray/vpngate/status');
-                if (!msg.success) return;
+                let msg;
+                try {
+                    msg = await HttpUtil.post('/panel/xray/vpngate/status');
+                } catch (error) {
+                    return;
+                }
+                if (!msg.success || !msg.obj) return;
                 const oldPhase = vpngateModal.connectStatus.phase;
                 this.setConnectStatus(msg.obj);
                 if (msg.obj.phase === 'connected') {
@@ -467,18 +478,23 @@
             async connectServer(server) {
                 if (!server) return;
                 vpngateModal.loading(true);
-                const msg = await HttpUtil.post('/panel/xray/vpngate/start', {
-                    server: JSON.stringify(server),
-                    ruleMode: vpngateModal.ruleMode,
-                    selectedCountries: JSON.stringify(vpngateModal.selectedCountries),
-                    fallbackEnable: vpngateModal.fallbackEnable,
-                });
-                vpngateModal.loading(false);
-                if (msg.success) {
-                    this.setConnectStatus(msg.obj);
-                    this.startStatusTimer();
-                } else {
+                try {
+                    const msg = await HttpUtil.post('/panel/xray/vpngate/start', {
+                        server: JSON.stringify(server),
+                        ruleMode: vpngateModal.ruleMode,
+                        selectedCountries: JSON.stringify(vpngateModal.selectedCountries),
+                        fallbackEnable: vpngateModal.fallbackEnable,
+                    });
+                    if (msg.success) {
+                        this.setConnectStatus(msg.obj);
+                        this.startStatusTimer();
+                    } else {
+                        Vue.prototype.$message.error('VPNGate 启动连接请求失败');
+                    }
+                } catch (error) {
                     Vue.prototype.$message.error('VPNGate 启动连接请求失败');
+                } finally {
+                    vpngateModal.loading(false);
                 }
             },
             async testServer(server) {
@@ -510,34 +526,50 @@
                     class: themeSwitcher.currentTheme,
                     onOk: async () => {
                         window.vpngateLoadingMsg = Vue.prototype.$message.loading('VPNGate 正在临时使用全部节点继续连接...', 0);
-                        const msg = await HttpUtil.post('/panel/xray/vpngate/continue');
-                        if (msg.success) {
-                            this.setConnectStatus(msg.obj);
-                            this.startStatusTimer();
-                        } else {
+                        try {
+                            const msg = await HttpUtil.post('/panel/xray/vpngate/continue');
+                            if (msg.success) {
+                                this.setConnectStatus(msg.obj);
+                                this.startStatusTimer();
+                                return;
+                            }
+                            Vue.prototype.$message.error('继续连接失败');
+                        } catch (error) {
+                            Vue.prototype.$message.error('继续连接失败');
+                        } finally {
                             if (window.vpngateLoadingMsg) {
                                 window.vpngateLoadingMsg();
                                 window.vpngateLoadingMsg = null;
                             }
-                            Vue.prototype.$message.error('继续连接失败');
                         }
                     },
                     onCancel: () => this.cancelConnect(),
                 });
             },
             async cancelConnect() {
-                const msg = await HttpUtil.post('/panel/xray/vpngate/cancel');
-                if (msg.success) {
-                    this.setConnectStatus(msg.obj);
+                try {
+                    const msg = await HttpUtil.post('/panel/xray/vpngate/cancel');
+                    if (msg.success) {
+                        this.setConnectStatus(msg.obj);
+                        this.removeVPNGateOutbound();
+                    }
+                } catch (error) {
+                    Vue.prototype.$message.error('取消失败');
+                } finally {
                     this.stopStatusTimer();
+                    vpngateModal.loading(false);
                 }
-                vpngateModal.loading(false);
             },
             async disconnectVPNGate() {
-                const msg = await HttpUtil.post('/panel/xray/vpngate/stop');
-                if (msg.success) {
-                    this.setConnectStatus(msg.obj);
-                    Vue.prototype.$message.success('VPNGate 已断开');
+                try {
+                    const msg = await HttpUtil.post('/panel/xray/vpngate/stop');
+                    if (msg.success) {
+                        this.setConnectStatus(msg.obj);
+                        this.removeVPNGateOutbound();
+                        Vue.prototype.$message.success('VPNGate 已断开');
+                    }
+                } catch (error) {
+                    Vue.prototype.$message.error('断开失败');
                 }
             },
             async uninstallVPNGate() {
@@ -549,16 +581,21 @@
                     cancelText: '取消',
                     class: themeSwitcher.currentTheme,
                     onOk: async () => {
-                        vpngateModal.loading(true);
-                        const msg = await HttpUtil.post('/panel/xray/vpngate/uninstall');
-                        vpngateModal.loading(false);
-                        if (msg.success) {
-                            Vue.prototype.$message.success('VPNGate 已移除');
-                            this.removeVPNGateOutbound();
-                            vpngateModal.servers = [];
-                            vpngateModal.close();
-                        } else {
+                        try {
+                            vpngateModal.loading(true);
+                            const msg = await HttpUtil.post('/panel/xray/vpngate/uninstall');
+                            if (msg.success) {
+                                Vue.prototype.$message.success('VPNGate 已移除');
+                                this.removeVPNGateOutbound();
+                                vpngateModal.servers = [];
+                                vpngateModal.close();
+                            } else {
+                                Vue.prototype.$message.error('移除失败');
+                            }
+                        } catch (error) {
                             Vue.prototype.$message.error('移除失败');
+                        } finally {
+                            vpngateModal.loading(false);
                         }
                     }
                 });
@@ -592,15 +629,21 @@
                 this.saveVPNGateSettings();
             },
             async loadVPNGateSettings() {
-                const msg = await HttpUtil.post('/panel/xray/vpngate/get_settings');
-                if (msg.success && msg.obj) {
+                try {
+                    const msg = await HttpUtil.post('/panel/xray/vpngate/get_settings');
+                    if (!msg.success || !msg.obj) return;
                     vpngateModal.refreshInterval = msg.obj.refreshInterval || 120;
                     vpngateModal.ruleMode = msg.obj.ruleMode || 'default';
                     if (!['default', 'fixed'].includes(vpngateModal.ruleMode)) {
                         vpngateModal.ruleMode = 'default';
                     }
                     vpngateModal.selectedCountries = msg.obj.selectedCountries || [];
+                    if (vpngateModal.ruleMode === 'fixed' && vpngateModal.selectedCountries.length === 0) {
+                        vpngateModal.ruleMode = 'default';
+                    }
                     vpngateModal.fallbackEnable = msg.obj.fallbackEnable !== false;
+                } catch (error) {
+                    vpngateModal.ruleMode = 'default';
                 }
             },
             settingsPayload() {
@@ -613,12 +656,17 @@
             },
             async saveVPNGateSettings() {
                 vpngateModal.loading(true);
-                const msg = await HttpUtil.post('/panel/xray/vpngate/save_settings', this.settingsPayload());
-                vpngateModal.loading(false);
-                if (msg.success) {
-                    this.resetCollapsedCountries();
-                } else {
+                try {
+                    const msg = await HttpUtil.post('/panel/xray/vpngate/save_settings', this.settingsPayload());
+                    if (msg.success) {
+                        this.resetCollapsedCountries();
+                    } else {
+                        Vue.prototype.$message.error('保存设置失败');
+                    }
+                } catch (error) {
                     Vue.prototype.$message.error('保存设置失败');
+                } finally {
+                    vpngateModal.loading(false);
                 }
             },
             serverKey(server) {
