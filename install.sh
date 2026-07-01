@@ -5,6 +5,7 @@ APP_NAME="X-MILI"
 REPO="https://github.com/Aimilibot/X-MILI"
 RAW="${X_MILI_RAW_BASE:-https://raw.githubusercontent.com/Aimilibot/X-MILI/main}"
 GO_VERSION="${X_MILI_GO_VERSION:-1.26.2}"
+RELEASE_TAG="${X_MILI_RELEASE_TAG:-latest}"
 INSTALL_DIR="${XUI_MAIN_FOLDER:-/usr/local/x-ui}"
 DATA_DIR="/etc/x-ui"
 LANG_DIR="/etc/x-mili"
@@ -36,25 +37,74 @@ choose_language() {
 
 is_zh() { [[ "$X_MILI_LANG" == "zh_CN" ]]; }
 
-install_deps() {
-    is_zh && log "正在安装基础依赖和 OpenVPN，包管理器可能需要几分钟..." || log "Installing base dependencies and OpenVPN. Package manager may take a few minutes..."
+build_swap_file=""
+build_swap_created=0
+
+ensure_build_swap() {
+    local mem_mb swap_mb size_mb
+    mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+    swap_mb=$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+    (( mem_mb > 0 && mem_mb < 1536 && swap_mb < 512 )) || return 0
+
+    size_mb="${X_MILI_BUILD_SWAP_MB:-2048}"
+    build_swap_file="${X_MILI_BUILD_SWAP_FILE:-/var/tmp/x-mili-build.swap}"
+    is_zh && warn "检测到低内存 ${mem_mb}MB，临时启用 ${size_mb}MB swap 防止编译中断。" || warn "Low memory detected (${mem_mb}MB). Enabling ${size_mb}MB temporary swap for build."
+
+    rm -f "$build_swap_file"
+    if command -v fallocate >/dev/null 2>&1; then
+        fallocate -l "${size_mb}M" "$build_swap_file" || dd if=/dev/zero of="$build_swap_file" bs=1M count="$size_mb"
+    else
+        dd if=/dev/zero of="$build_swap_file" bs=1M count="$size_mb"
+    fi
+    chmod 600 "$build_swap_file"
+    mkswap "$build_swap_file" >/dev/null
+    swapon "$build_swap_file"
+    build_swap_created=1
+}
+
+cleanup_build_swap() {
+    if [[ "$build_swap_created" == "1" && -n "$build_swap_file" ]]; then
+        swapoff "$build_swap_file" >/dev/null 2>&1 || true
+        rm -f "$build_swap_file"
+    fi
+}
+
+install_runtime_deps() {
+    is_zh && log "正在安装运行依赖和 OpenVPN..." || log "Installing runtime dependencies and OpenVPN..."
     if command -v apt-get >/dev/null 2>&1; then
         is_zh && warn "如果系统自动更新正在运行，将等待 apt/dpkg 锁释放。" || warn "Waiting for apt/dpkg lock if unattended upgrades are running."
         apt-get -o DPkg::Lock::Timeout=1800 update
-        apt-get -o DPkg::Lock::Timeout=1800 install -y ca-certificates curl tar gzip unzip gcc g++ make openssl openvpn
+        apt-get -o DPkg::Lock::Timeout=1800 install -y ca-certificates curl tar gzip openssl openvpn
     elif command -v dnf >/dev/null 2>&1; then
-        dnf install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl openvpn
+        dnf install -y ca-certificates curl tar gzip openssl openvpn
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl openvpn
+        yum install -y ca-certificates curl tar gzip openssl openvpn
     elif command -v apk >/dev/null 2>&1; then
-        apk add --no-cache ca-certificates curl tar gzip unzip build-base openssl openvpn
+        apk add --no-cache ca-certificates curl tar gzip openssl openvpn
     elif command -v pacman >/dev/null 2>&1; then
-        pacman -Sy --noconfirm ca-certificates curl tar gzip unzip gcc make openssl openvpn
+        pacman -Sy --noconfirm ca-certificates curl tar gzip openssl openvpn
     elif command -v zypper >/dev/null 2>&1; then
         zypper refresh
-        zypper -q install -y ca-certificates curl tar gzip unzip gcc gcc-c++ make openssl openvpn
+        zypper -q install -y ca-certificates curl tar gzip openssl openvpn
     else
         fail "Unsupported package manager / 不支持的包管理器"
+    fi
+}
+
+install_build_deps() {
+    is_zh && warn "未找到预编译一体包，回退为本机编译，将安装 Go/GCC。" || warn "Prebuilt bundle not found. Falling back to local build with Go/GCC."
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get -o DPkg::Lock::Timeout=1800 install -y unzip gcc libc6-dev make
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y unzip gcc glibc-devel make
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y unzip gcc glibc-devel make
+    elif command -v apk >/dev/null 2>&1; then
+        apk add --no-cache unzip gcc musl-dev make
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -Sy --noconfirm unzip gcc make
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper -q install -y unzip gcc glibc-devel make
     fi
 }
 
@@ -279,43 +329,75 @@ EOF
     systemctl enable --now x-ui
 }
 
+install_prebuilt_bundle() {
+    local arch url package_dir
+    arch=$(detect_arch)
+    url="${REPO}/releases/download/${RELEASE_TAG}/x-mili-linux-${arch}.tar.gz"
+    package_dir="$tmp_dir/package"
+
+    is_zh && log "尝试下载预编译一体包: ${url}" || log "Trying prebuilt bundle: ${url}"
+    mkdir -p "$package_dir"
+    if ! curl -fL "$url" -o "$tmp_dir/package.tar.gz"; then
+        return 1
+    fi
+    tar -xzf "$tmp_dir/package.tar.gz" -C "$package_dir"
+    [[ -x "$package_dir/x-ui" && -f "$package_dir/x-ui.sh" && -d "$package_dir/bin" ]] || return 1
+
+    cp -a "$package_dir"/. "$INSTALL_DIR/"
+    install -m 755 "$package_dir/x-ui.sh" /usr/bin/ml
+    chmod +x "$INSTALL_DIR/x-ui" "$INSTALL_DIR"/bin/xray-linux-* 2>/dev/null || true
+    return 0
+}
+
+build_from_source() {
+    install_build_deps
+    install_go
+
+    is_zh && log "下载 X-MILI 源码" || log "Downloading X-MILI source"
+    log "${REPO}"
+    curl -fL "${REPO}/archive/refs/heads/main.tar.gz" -o "$tmp_dir/source.tar.gz"
+    mkdir -p "$tmp_dir/src"
+    tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir/src" --strip-components=1
+
+    cd "$tmp_dir/src"
+    is_zh && log "编译面板程序，低配机器可能需要一会儿" || log "Building panel binary, this may take a while on small servers"
+    mkdir -p build
+    ensure_build_swap
+    GOMAXPROCS="${X_MILI_GOMAXPROCS:-1}" GOMEMLIMIT="${X_MILI_GOMEMLIMIT:-768MiB}" /usr/local/go/bin/go build -p "${X_MILI_GO_BUILD_P:-1}" -ldflags "-w -s" -o build/x-ui main.go
+    chmod +x DockerInit.sh
+    ./DockerInit.sh "$(detect_arch)"
+
+    cp -a build/. "$INSTALL_DIR/"
+    install -m 755 x-ui.sh /usr/bin/ml
+}
+
+install_program_files() {
+    if install_prebuilt_bundle; then
+        is_zh && log "已使用预编译一体包，跳过 Go/GCC 编译。" || log "Prebuilt bundle installed. Skipped Go/GCC build."
+    else
+        build_from_source
+    fi
+    echo "$X_MILI_LANG" > "$LANG_FILE"
+}
+
 choose_language
 is_zh && log "开始安装/更新 ${APP_NAME}" || log "Installing/updating ${APP_NAME}"
 
 command -v systemctl >/dev/null 2>&1 || fail "需要 systemd / systemd is required"
-is_zh && step 1 10 "检查并安装系统依赖、OpenVPN" || step 1 10 "Installing system dependencies and OpenVPN"
-install_deps
-is_zh && step 2 10 "下载并安装 Go 编译环境" || step 2 10 "Downloading and installing Go"
-install_go
-is_zh && step 3 10 "清理旧程序文件，保留面板数据" || step 3 10 "Cleaning old runtime files, keeping panel data"
+is_zh && step 1 5 "安装运行依赖和 OpenVPN" || step 1 5 "Installing runtime dependencies and OpenVPN"
+install_runtime_deps
+is_zh && step 2 5 "清理旧程序文件，保留面板数据" || step 2 5 "Cleaning old runtime files, keeping panel data"
 clean_old_runtime
 
 tmp_dir=$(mktemp -d -t x-mili-install.XXXXXX)
-trap 'rm -rf "$tmp_dir"' EXIT
+trap 'cleanup_build_swap; rm -rf "$tmp_dir"' EXIT
 
-is_zh && step 4 10 "下载 X-MILI 源码" || step 4 10 "Downloading X-MILI source"
-log "${REPO}"
-curl -fL "${REPO}/archive/refs/heads/main.tar.gz" -o "$tmp_dir/source.tar.gz"
-mkdir -p "$tmp_dir/src"
-is_zh && step 5 10 "解压源码" || step 5 10 "Extracting source"
-tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir/src" --strip-components=1
+is_zh && step 3 5 "安装 X-MILI 程序文件" || step 3 5 "Installing X-MILI program files"
+install_program_files
 
-cd "$tmp_dir/src"
-is_zh && step 6 10 "编译面板程序，低配机器可能需要一会儿" || step 6 10 "Building panel binary, this may take a while on small servers"
-mkdir -p build
-/usr/local/go/bin/go build -ldflags "-w -s" -o build/x-ui main.go
-chmod +x DockerInit.sh
-is_zh && step 7 10 "准备 Xray 核心和运行文件" || step 7 10 "Preparing Xray core and runtime files"
-./DockerInit.sh "$(detect_arch)"
-
-is_zh && step 8 10 "安装程序文件和 ml 管理命令" || step 8 10 "Installing program files and ml command"
-cp -r build/* "$INSTALL_DIR/"
-install -m 755 x-ui.sh /usr/bin/ml
-echo "$X_MILI_LANG" > "$LANG_FILE"
-
-is_zh && step 9 10 "配置面板账号、端口和安全后缀" || step 9 10 "Configuring panel login, port and secure suffix"
+is_zh && step 4 5 "配置面板账号、端口和安全后缀" || step 4 5 "Configuring panel login, port and secure suffix"
 init_panel_settings
-is_zh && step 10 10 "安装并启动系统服务" || step 10 10 "Installing and starting system service"
+is_zh && step 5 5 "安装并启动系统服务" || step 5 5 "Installing and starting system service"
 install_service
 print_install_guide
 

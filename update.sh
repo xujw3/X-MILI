@@ -6,6 +6,7 @@ REPO="https://github.com/Aimilibot/X-MILI"
 API_REPO="https://api.github.com/repos/Aimilibot/X-MILI"
 INSTALL_DIR="${XUI_MAIN_FOLDER:-/usr/local/x-ui}"
 COMMIT_FILE="${INSTALL_DIR}/.x-mili-commit"
+RELEASE_TAG="${X_MILI_RELEASE_TAG:-latest}"
 
 red='\033[0;31m'
 green='\033[0;32m'
@@ -16,18 +17,54 @@ log() { echo -e "${green}[${APP_NAME}]${plain} $*"; }
 warn() { echo -e "${yellow}[${APP_NAME}]${plain} $*"; }
 fail() { echo -e "${red}[${APP_NAME}]${plain} $*" >&2; exit 1; }
 
+build_swap_file=""
+build_swap_created=0
+
+ensure_build_swap() {
+    local mem_mb swap_mb size_mb
+    mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+    swap_mb=$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)
+    (( mem_mb > 0 && mem_mb < 1536 && swap_mb < 512 )) || return 0
+
+    size_mb="${X_MILI_BUILD_SWAP_MB:-2048}"
+    build_swap_file="${X_MILI_BUILD_SWAP_FILE:-/var/tmp/x-mili-build.swap}"
+    warn "检测到低内存 ${mem_mb}MB，临时启用 ${size_mb}MB swap 防止编译中断。"
+
+    rm -f "$build_swap_file"
+    if command -v fallocate >/dev/null 2>&1; then
+        fallocate -l "${size_mb}M" "$build_swap_file" || dd if=/dev/zero of="$build_swap_file" bs=1M count="$size_mb"
+    else
+        dd if=/dev/zero of="$build_swap_file" bs=1M count="$size_mb"
+    fi
+    chmod 600 "$build_swap_file"
+    mkswap "$build_swap_file" >/dev/null
+    swapon "$build_swap_file"
+    build_swap_created=1
+}
+
+cleanup_build_swap() {
+    if [[ "$build_swap_created" == "1" && -n "$build_swap_file" ]]; then
+        swapoff "$build_swap_file" >/dev/null 2>&1 || true
+        rm -f "$build_swap_file"
+    fi
+}
+
 [[ $EUID -ne 0 ]] && fail "请使用 root 运行 / Please run as root"
 command -v systemctl >/dev/null 2>&1 || fail "需要 systemd / systemd is required"
 [[ -d "$INSTALL_DIR" ]] || fail "未找到安装目录 ${INSTALL_DIR}，请先安装"
 
-GO_BIN="${GO_BIN:-/usr/local/go/bin/go}"
-if [[ ! -x "$GO_BIN" ]]; then
-    GO_BIN="$(command -v go || true)"
-fi
-[[ -n "$GO_BIN" && -x "$GO_BIN" ]] || fail "缺少 Go 编译环境，请先运行安装脚本"
 command -v curl >/dev/null 2>&1 || fail "缺少 curl"
 command -v tar >/dev/null 2>&1 || fail "缺少 tar"
-command -v gcc >/dev/null 2>&1 || warn "未检测到 gcc；如果编译失败，请先安装 gcc"
+
+detect_arch() {
+    case "$(uname -m)" in
+        x86_64 | amd64) echo "amd64" ;;
+        i386 | i686) echo "i386" ;;
+        aarch64 | arm64) echo "arm64" ;;
+        armv7* | armv6* | arm*) echo "arm" ;;
+        *) echo "amd64" ;;
+    esac
+}
 
 remote_commit="$(curl -fsSL "${API_REPO}/git/ref/heads/main" | sed -n 's/.*"sha": "\([0-9a-f]\{40\}\)".*/\1/p' || true)"
 local_commit="$(cat "$COMMIT_FILE" 2>/dev/null || true)"
@@ -39,39 +76,76 @@ fi
 
 tmp_dir="$(mktemp -d -t x-mili-update.XXXXXX)"
 backup_dir="$(mktemp -d -t x-mili-update-backup.XXXXXX)"
-trap 'rm -rf "$tmp_dir" "$backup_dir"' EXIT
+trap 'cleanup_build_swap; rm -rf "$tmp_dir" "$backup_dir"' EXIT
 
-archive_ref="${remote_commit:-main}"
-log "下载最新源码..."
-curl -fL "${REPO}/archive/${archive_ref}.tar.gz" -o "$tmp_dir/source.tar.gz"
-mkdir -p "$tmp_dir/src"
-tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir/src" --strip-components=1
+download_prebuilt_bundle() {
+    local arch url package_dir package_commit
+    arch=$(detect_arch)
+    url="${REPO}/releases/download/${RELEASE_TAG}/x-mili-linux-${arch}.tar.gz"
+    package_dir="$tmp_dir/package"
 
-log "编译面板程序..."
-cd "$tmp_dir/src"
-mkdir -p build
-"$GO_BIN" build -ldflags "-w -s" -o build/x-ui main.go
+    log "尝试下载预编译一体包: ${url}"
+    mkdir -p "$package_dir"
+    if ! curl -fL "$url" -o "$tmp_dir/package.tar.gz"; then
+        return 1
+    fi
+    tar -xzf "$tmp_dir/package.tar.gz" -C "$package_dir"
+    [[ -x "$package_dir/x-ui" && -f "$package_dir/x-ui.sh" ]] || return 1
+    package_commit="$(cat "$package_dir/.x-mili-commit" 2>/dev/null || true)"
+    [[ -z "$remote_commit" || -z "$package_commit" || "$package_commit" == "$remote_commit" ]] || return 1
+    return 0
+}
+
+build_from_source() {
+    local archive_ref go_bin
+    go_bin="${GO_BIN:-/usr/local/go/bin/go}"
+    if [[ ! -x "$go_bin" ]]; then
+        go_bin="$(command -v go || true)"
+    fi
+    [[ -n "$go_bin" && -x "$go_bin" ]] || fail "没有可用预编译包，且本机缺少 Go，无法回退编译。"
+    command -v gcc >/dev/null 2>&1 || fail "没有可用预编译包，且本机缺少 gcc，无法回退编译。"
+
+    archive_ref="${remote_commit:-main}"
+    log "下载最新源码..."
+    curl -fL "${REPO}/archive/${archive_ref}.tar.gz" -o "$tmp_dir/source.tar.gz"
+    mkdir -p "$tmp_dir/src"
+    tar -xzf "$tmp_dir/source.tar.gz" -C "$tmp_dir/src" --strip-components=1
+
+    log "编译面板程序..."
+    cd "$tmp_dir/src"
+    mkdir -p build
+    ensure_build_swap
+    GOMAXPROCS="${X_MILI_GOMAXPROCS:-1}" GOMEMLIMIT="${X_MILI_GOMEMLIMIT:-768MiB}" "$go_bin" build -p "${X_MILI_GO_BUILD_P:-1}" -ldflags "-w -s" -o build/x-ui main.go
+    cp x-ui.sh build/x-ui.sh
+    [[ -n "$remote_commit" ]] && echo "$remote_commit" > build/.x-mili-commit
+}
+
+if download_prebuilt_bundle; then
+    update_dir="$tmp_dir/package"
+    log "已使用预编译一体包，跳过本机编译。"
+else
+    build_from_source
+    update_dir="$tmp_dir/src/build"
+fi
 
 log "备份当前程序..."
-[[ -f "$INSTALL_DIR/x-ui" ]] && cp -a "$INSTALL_DIR/x-ui" "$backup_dir/x-ui"
+mkdir -p "$backup_dir/install"
+cp -a "$INSTALL_DIR"/. "$backup_dir/install"/
 [[ -f /usr/bin/ml ]] && cp -a /usr/bin/ml "$backup_dir/ml"
-[[ -f "$COMMIT_FILE" ]] && cp -a "$COMMIT_FILE" "$backup_dir/commit"
 
 rollback() {
     warn "更新失败，正在回滚..."
-    [[ -f "$backup_dir/x-ui" ]] && install -m 755 "$backup_dir/x-ui" "$INSTALL_DIR/x-ui"
+    rm -rf "$INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+    cp -a "$backup_dir/install"/. "$INSTALL_DIR"/
     [[ -f "$backup_dir/ml" ]] && install -m 755 "$backup_dir/ml" /usr/bin/ml
-    if [[ -f "$backup_dir/commit" ]]; then
-        install -m 644 "$backup_dir/commit" "$COMMIT_FILE"
-    else
-        rm -f "$COMMIT_FILE"
-    fi
     systemctl restart x-ui >/dev/null 2>&1 || true
 }
 
 log "替换程序文件和菜单..."
-install -m 755 build/x-ui "$INSTALL_DIR/x-ui"
-install -m 755 x-ui.sh /usr/bin/ml
+cp -a "$update_dir"/. "$INSTALL_DIR"/
+install -m 755 "$update_dir/x-ui.sh" /usr/bin/ml
+chmod +x "$INSTALL_DIR/x-ui" "$INSTALL_DIR"/bin/xray-linux-* 2>/dev/null || true
 [[ -n "$remote_commit" ]] && echo "$remote_commit" > "$COMMIT_FILE"
 
 log "重启面板..."
