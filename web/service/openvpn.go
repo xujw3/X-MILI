@@ -129,8 +129,37 @@ func (s *OpenVPNService) ContinueVPNGateWithAll() OpenVPNStatus {
 
 func (s *OpenVPNService) VPNGateStatus() OpenVPNStatus {
 	vpnGateOpenVPN.Lock()
-	defer vpnGateOpenVPN.Unlock()
-	return cloneOpenVPNStatus(vpnGateOpenVPN.status)
+	status := cloneOpenVPNStatus(vpnGateOpenVPN.status)
+	vpnGateOpenVPN.Unlock()
+
+	if status.Phase == "connected" {
+		if status.TunIP == "" || vpnGateTunIPActive(status.TunIP) {
+			return status
+		}
+		vpnGateOpenVPN.Lock()
+		if vpnGateOpenVPN.status.Phase == "connected" {
+			vpnGateOpenVPN.status.Phase = "failed"
+			vpnGateOpenVPN.status.Progress = 0
+			vpnGateOpenVPN.status.Message = "VPNGate 连接已失效"
+		}
+		status = cloneOpenVPNStatus(vpnGateOpenVPN.status)
+		vpnGateOpenVPN.Unlock()
+		return status
+	}
+
+	if status.Phase == "installing" || status.Phase == "preparing" || status.Phase == "connecting" || status.Phase == "waiting_confirm" {
+		return status
+	}
+
+	if synced, ok := inferVPNGateStatusFromXray(); ok {
+		vpnGateOpenVPN.Lock()
+		if vpnGateOpenVPN.status.Phase != "installing" && vpnGateOpenVPN.status.Phase != "preparing" && vpnGateOpenVPN.status.Phase != "connecting" && vpnGateOpenVPN.status.Phase != "waiting_confirm" {
+			vpnGateOpenVPN.status = synced
+		}
+		status = cloneOpenVPNStatus(vpnGateOpenVPN.status)
+		vpnGateOpenVPN.Unlock()
+	}
+	return status
 }
 
 func (s *OpenVPNService) PrepareVPNGateOpenVPN() {
@@ -213,7 +242,7 @@ func (s *OpenVPNService) connectVPNGate(ctx context.Context, taskID int64, serve
 		return
 	}
 
-	vpnGateOpenVPN.setTask(taskID, "connecting", 45, "正在尝试连接")
+	vpnGateOpenVPN.setTask(taskID, "connecting", 45, fmt.Sprintf("正在尝试连接 [%s - %s]", server.CountryLong, server.IP))
 	cmd := exec.CommandContext(ctx, "openvpn", "--config", configPath, "--route-nopull", "--auth-nocache", "--verb", "3")
 	writer := &openVPNLogWriter{}
 	cmd.Stdout = writer
@@ -533,6 +562,77 @@ func buildVPNGateOutbound(tunIP string) map[string]any {
 			"domainStrategy": "UseIP",
 		},
 	}
+}
+
+func vpnGateTunIPActive(tunIP string) bool {
+	if runtime.GOOS != "linux" || tunIP == "" {
+		return false
+	}
+	tuns, err := listOpenVPNTun()
+	if err != nil {
+		return false
+	}
+	for _, ip := range tuns {
+		if ip == tunIP {
+			return true
+		}
+	}
+	return false
+}
+
+func inferVPNGateStatusFromXray() (OpenVPNStatus, bool) {
+	if runtime.GOOS != "linux" {
+		return OpenVPNStatus{}, false
+	}
+	outbound, tunIP, ok := getXrayVPNGateOutbound()
+	if !ok || tunIP == "" {
+		return OpenVPNStatus{}, false
+	}
+	tuns, err := listOpenVPNTun()
+	if err != nil {
+		return OpenVPNStatus{}, false
+	}
+	for tunDev, ip := range tuns {
+		if ip != tunIP {
+			continue
+		}
+		if err := setupOpenVPNPolicyRoute(tunIP, tunDev); err != nil {
+			logger.Warningf("[VPNGate] Failed to sync policy route: %v", err)
+		}
+		return OpenVPNStatus{
+			Phase:    "connected",
+			Progress: 100,
+			Message:  "已同步现有 VPNGate 连接",
+			TunIP:    tunIP,
+			TunDev:   tunDev,
+			Outbound: outbound,
+		}, true
+	}
+	return OpenVPNStatus{}, false
+}
+
+func getXrayVPNGateOutbound() (map[string]any, string, bool) {
+	templateConfig, err := (&SettingService{}).GetXrayConfigTemplate()
+	if err != nil {
+		return nil, "", false
+	}
+	var configMap map[string]any
+	if err := json.Unmarshal([]byte(templateConfig), &configMap); err != nil {
+		return nil, "", false
+	}
+	outbounds, ok := configMap["outbounds"].([]any)
+	if !ok {
+		return nil, "", false
+	}
+	for _, outbound := range outbounds {
+		outboundMap, ok := outbound.(map[string]any)
+		if !ok || outboundMap["tag"] != vpnGateOutboundTag {
+			continue
+		}
+		tunIP, _ := outboundMap["sendThrough"].(string)
+		return outboundMap, tunIP, true
+	}
+	return nil, "", false
 }
 
 func (t *openVPNTask) setTask(taskID int64, phase string, progress int, message string) {

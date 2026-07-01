@@ -1933,9 +1933,13 @@
   .light #vpngate-modal .vpngate-metric small {
     color: rgba(0, 0, 0, 0.45);
   }
+  #vpngate-modal .vpngate-advanced-toggle {
+    grid-column: 1 / -1;
+    justify-self: end;
+  }
   #vpngate-modal .vpngate-settings-row {
     display: flex;
-    align-items: flex-end;
+    align-items: center;
     flex-wrap: wrap;
     gap: 12px;
     margin-bottom: 12px;
@@ -1955,8 +1959,10 @@
   #vpngate-modal .vpngate-switch-line {
     display: inline-flex;
     align-items: center;
+    margin-left: auto;
+    min-height: 32px;
     gap: 10px;
-    padding: 7px 10px;
+    padding: 4px 10px;
     border-radius: 8px;
     border: 1px solid rgba(0, 191, 165, 0.24);
     background: rgba(0, 191, 165, 0.08);
@@ -1991,6 +1997,17 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  #vpngate-modal .vpngate-reason {
+    margin: -2px 0 10px;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .light #vpngate-modal .vpngate-reason {
+    color: rgba(0, 0, 0, 0.55);
   }
   #vpngate-settings-modal .vpngate-refresh-control {
     display: grid;
@@ -2048,6 +2065,9 @@
   @media (max-width: 640px) {
     #vpngate-modal .vpngate-metrics {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    #vpngate-modal .vpngate-switch-line {
+      margin-left: 0;
     }
     #vpngate-settings-modal .vpngate-refresh-control {
       grid-template-columns: 1fr;

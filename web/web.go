@@ -319,6 +319,11 @@ func (s *Server) startTask() {
 		service.CheckAndRefreshVPNGate(interval)
 	})
 
+	// Check WARP outbound every 12 minutes and replace it after it becomes unusable.
+	s.cron.AddFunc("@every 12m", func() {
+		(&service.WarpService{}).CheckAndRepairWarp()
+	})
+
 	// Check if xray needs to be restarted every 30 seconds
 	s.cron.AddFunc("@every 30s", func() {
 		if s.xrayService.IsNeedRestartAndSetFalse() {

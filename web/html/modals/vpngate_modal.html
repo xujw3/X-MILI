@@ -14,9 +14,9 @@
             </div>
             <div class="vpngate-actions">
                 <a-button icon="sync" @click="refreshNodes" :loading="vpngateModal.confirmLoading">重新获取</a-button>
-                <a-button v-if="isConnected" type="danger" icon="disconnect" @click="disconnectVPNGate">断开</a-button>
+                <a-button v-if="isConnected" type="danger" icon="disconnect" @click="disconnectVPNGate">关闭连接</a-button>
                 <a-button v-else type="primary" icon="api" @click="connectVPNGate" :loading="connectBusy || vpngateModal.confirmLoading" :disabled="connectBusy || needsCountry"
-                    :title="addOutboundDisabledReason">连接</a-button>
+                    :title="addOutboundDisabledReason">连接节点</a-button>
             </div>
             <div class="vpngate-metrics">
                 <div class="vpngate-metric">
@@ -44,6 +44,11 @@
                     <span>[[ failedNodeCount ]]</span>
                 </div>
             </div>
+            <div class="vpngate-advanced-toggle">
+                <a-button size="small" icon="setting" @click="vpngateModal.advancedOpen = !vpngateModal.advancedOpen">
+                    [[ vpngateModal.advancedOpen ? '关闭高级' : '高级' ]]
+                </a-button>
+            </div>
         </div>
 
         <div class="vpngate-progress" v-if="connectionActive">
@@ -52,24 +57,24 @@
                 <span>[[ vpngateModal.connectStatus.message ]]</span>
                 <span v-if="vpngateModal.connectStatus.tunIP" class="vpngate-mono">[[ vpngateModal.connectStatus.tunDev ]] · [[ vpngateModal.connectStatus.tunIP ]]</span>
             </div>
+            <div class="vpngate-reason" v-if="connectionReason">[[ connectionReason ]]</div>
             <a-button v-if="canCancel" size="small" type="danger" icon="close" @click="cancelConnect">取消</a-button>
         </div>
     </div>
 
-    <div class="vpngate-panel">
+    <div class="vpngate-panel" v-if="vpngateModal.advancedOpen">
         <div class="vpngate-settings-row">
             <div class="vpngate-setting">
                 <small>连接模式</small>
                 <a-radio-group v-model="vpngateModal.ruleMode" button-style="solid" size="small" @change="onRuleModeChanged">
-                    <a-radio-button value="default">自动</a-radio-button>
-                    <a-radio-button value="fixed">固定国家</a-radio-button>
+                    <a-radio-button value="default">自动连接</a-radio-button>
+                    <a-radio-button value="fixed">固定连接</a-radio-button>
                 </a-radio-group>
             </div>
             <div class="vpngate-setting vpngate-switch-line">
                 <small>自动切换</small>
                 <a-switch v-model="vpngateModal.fallbackEnable" checked-children="开" un-checked-children="关" @change="saveVPNGateSettings"></a-switch>
             </div>
-            <a-button type="danger" icon="delete" @click="uninstallVPNGate" :loading="vpngateModal.confirmLoading">移除</a-button>
         </div>
 
         <div v-if="vpngateModal.ruleMode === 'fixed'" :style="{ marginBottom: '12px' }">
@@ -159,6 +164,7 @@
         fallbackEnable: true,
         testingNodeKey: '',
         collapsedCountries: {},
+        advancedOpen: false,
         connectStatus: {
             phase: 'idle',
             progress: 0,
@@ -249,13 +255,13 @@
             },
             emptySelectionHint() {
                 if (vpngateModal.ruleMode === 'fixed' && vpngateModal.selectedCountries.length === 0) {
-                    return '国家连接需要先选择国家/地区';
+                    return '固定连接需要先选择国家/地区';
                 }
                 return '当前连接方式没有可用节点';
             },
             addOutboundDisabledReason() {
                 if (this.connectBusy) return 'VPNGate 正在连接中';
-                if (this.needsCountry) return '国家连接需要先选择国家/地区';
+                if (this.needsCountry) return '固定连接需要先选择国家/地区';
                 if (!this.bestServer) return this.emptySelectionHint;
                 return '';
             },
@@ -264,9 +270,18 @@
             },
             shortRuleName() {
                 return {
-                    default: '自动',
-                    fixed: '固定国家',
-                }[vpngateModal.ruleMode] || '自动';
+                    default: '自动连接',
+                    fixed: '固定连接',
+                }[vpngateModal.ruleMode] || '自动连接';
+            },
+            connectionReason() {
+                const status = vpngateModal.connectStatus || {};
+                if (status.error) return '原因：' + status.error;
+                const logs = Array.isArray(status.log) ? status.log.filter(Boolean) : [];
+                if (logs.length > 0) return '日志：' + logs[logs.length - 1];
+                if (status.server && status.server.ip) return `当前节点：${status.server.countryLong || ''} ${status.server.ip}`;
+                if (this.displayServer && this.displayServer.ip) return `当前节点：${this.displayServer.countryLong || ''} ${this.displayServer.ip}`;
+                return '';
             },
             statusName() {
                 return {
@@ -578,34 +593,6 @@
                 } catch (error) {
                     Vue.prototype.$message.error('断开失败');
                 }
-            },
-            async uninstallVPNGate() {
-                this.$confirm({
-                    title: '确认要移除 VPNGate 吗？',
-                    content: '该操作将断开当前 VPN 连接、删除 VPNGate 出站并清空节点缓存。',
-                    okText: '确定',
-                    okType: 'danger',
-                    cancelText: '取消',
-                    class: themeSwitcher.currentTheme,
-                    onOk: async () => {
-                        try {
-                            vpngateModal.loading(true);
-                            const msg = await HttpUtil.post('/panel/xray/vpngate/uninstall');
-                            if (msg.success) {
-                                Vue.prototype.$message.success('VPNGate 已移除');
-                                this.removeVPNGateOutbound();
-                                this.clearNodes();
-                                vpngateModal.close();
-                            } else {
-                                Vue.prototype.$message.error('移除失败');
-                            }
-                        } catch (error) {
-                            Vue.prototype.$message.error('移除失败');
-                        } finally {
-                            vpngateModal.loading(false);
-                        }
-                    }
-                });
             },
             removeVPNGateOutbound() {
                 if (!app.templateSettings) return;

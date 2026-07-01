@@ -2,14 +2,19 @@ package service
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/logger"
 	"github.com/mhsanaei/3x-ui/v2/util/common"
+	"golang.org/x/crypto/curve25519"
 )
 
 // WarpService provides business logic for Cloudflare WARP integration.
@@ -17,6 +22,11 @@ import (
 type WarpService struct {
 	SettingService
 }
+
+var (
+	warpMonitorMu      sync.Mutex
+	warpMonitorStopped bool
+)
 
 func (s *WarpService) GetWarpData() (string, error) {
 	warp, err := s.SettingService.GetWarp()
@@ -27,6 +37,9 @@ func (s *WarpService) GetWarpData() (string, error) {
 }
 
 func (s *WarpService) DelWarpData() error {
+	warpMonitorMu.Lock()
+	warpMonitorStopped = false
+	warpMonitorMu.Unlock()
 	err := s.SettingService.SetWarp("")
 	if err != nil {
 		return err
@@ -69,6 +82,11 @@ func (s *WarpService) GetWarpConfig() (string, error) {
 }
 
 func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error) {
+	result, _, _, err := s.registerWarp(secretKey, publicKey, true)
+	return result, err
+}
+
+func (s *WarpService) registerWarp(secretKey string, publicKey string, save bool) (string, map[string]string, map[string]any, error) {
 	tos := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 	hostName, _ := os.Hostname()
 	data := fmt.Sprintf(`{"key":"%s","tos":"%s","type": "PC","model": "x-ui", "name": "%s"}`, publicKey, tos, hostName)
@@ -77,7 +95,7 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer([]byte(data)))
 	if err != nil {
-		return "", err
+		return "", nil, nil, err
 	}
 
 	req.Header.Add("CF-Client-Version", "a-7.21-0721")
@@ -86,47 +104,65 @@ func (s *WarpService) RegWarp(secretKey string, publicKey string) (string, error
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", nil, nil, err
 	}
 	defer resp.Body.Close()
 	buffer := &bytes.Buffer{}
 	_, err = buffer.ReadFrom(resp.Body)
 	if err != nil {
-		return "", err
+		return "", nil, nil, err
 	}
 
 	var rspData map[string]any
 	err = json.Unmarshal(buffer.Bytes(), &rspData)
 	if err != nil {
-		return "", err
+		return "", nil, nil, err
 	}
 
 	deviceId, ok := rspData["id"].(string)
 	if !ok || deviceId == "" {
-		return "", common.NewError("invalid WARP response: missing device id")
+		return "", nil, nil, common.NewError("invalid WARP response: missing device id")
 	}
 	token, ok := rspData["token"].(string)
 	if !ok || token == "" {
-		return "", common.NewError("invalid WARP response: missing token")
+		return "", nil, nil, common.NewError("invalid WARP response: missing token")
 	}
 	account, ok := rspData["account"].(map[string]any)
 	if !ok {
-		return "", common.NewError("invalid WARP response: missing account")
+		return "", nil, nil, common.NewError("invalid WARP response: missing account")
 	}
 	license, ok := account["license"].(string)
 	if !ok {
 		logger.Debug("Error accessing license value.")
-		return "", common.NewError("invalid WARP response: missing license")
+		return "", nil, nil, common.NewError("invalid WARP response: missing license")
 	}
 
-	warpData := fmt.Sprintf("{\n  \"access_token\": \"%s\",\n  \"device_id\": \"%s\",", token, deviceId)
-	warpData += fmt.Sprintf("\n  \"license_key\": \"%s\",\n  \"private_key\": \"%s\"\n}", license, secretKey)
+	warpData := map[string]string{
+		"access_token": token,
+		"device_id":    deviceId,
+		"license_key":  license,
+		"private_key":  secretKey,
+	}
+	warpDataJSON, err := json.MarshalIndent(warpData, "", "  ")
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if save {
+		warpMonitorMu.Lock()
+		warpMonitorStopped = false
+		warpMonitorMu.Unlock()
+		s.SettingService.SetWarp(string(warpDataJSON))
+	}
 
-	s.SettingService.SetWarp(warpData)
+	result, err := json.Marshal(map[string]any{
+		"data":   warpData,
+		"config": rspData,
+	})
+	if err != nil {
+		return "", nil, nil, err
+	}
 
-	result := fmt.Sprintf("{\n  \"data\": %s,\n  \"config\": %s\n}", warpData, buffer.String())
-
-	return result, nil
+	return string(result), warpData, rspData, nil
 }
 
 func (s *WarpService) SetWarpLicense(license string) (string, error) {
@@ -177,7 +213,207 @@ func (s *WarpService) SetWarpLicense(license string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	warpMonitorMu.Lock()
+	warpMonitorStopped = false
+	warpMonitorMu.Unlock()
 	s.SettingService.SetWarp(string(newWarpData))
 
 	return string(newWarpData), nil
+}
+
+func (s *WarpService) CheckAndRepairWarp() {
+	warpMonitorMu.Lock()
+	defer warpMonitorMu.Unlock()
+	if warpMonitorStopped {
+		return
+	}
+	if err := s.checkAndRepairWarpLocked(); err != nil {
+		logger.Warningf("[WARP] Monitor failed: %v", err)
+	}
+}
+
+func (s *WarpService) checkAndRepairWarpLocked() error {
+	configMap, outbounds, current, err := loadWarpXrayConfig()
+	if err != nil || current == nil {
+		return err
+	}
+
+	if ok, msg := s.testWarpOutbound(current, outbounds); ok {
+		logger.Debugf("[WARP] Monitor check passed: %s", msg)
+		return nil
+	} else if strings.Contains(msg, "Another outbound test") {
+		logger.Infof("[WARP] Monitor skipped: %s", msg)
+		return nil
+	} else {
+		logger.Warningf("[WARP] Current node failed, trying replacement: %s", msg)
+	}
+
+	var lastErr string
+	for i := 1; i <= 10; i++ {
+		privateKey, publicKey, err := generateWarpKeypair()
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		_, warpData, warpConfig, err := s.registerWarp(privateKey, publicKey, false)
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		candidate, err := buildWarpOutbound(warpData, warpConfig)
+		if err != nil {
+			lastErr = err.Error()
+			continue
+		}
+		nextOutbounds := replaceOutboundByTag(outbounds, "warp", candidate)
+		if ok, msg := s.testWarpOutbound(candidate, nextOutbounds); ok {
+			if err := saveWarpReplacement(configMap, nextOutbounds, warpData); err != nil {
+				return err
+			}
+			logger.Infof("[WARP] Replaced unusable node after %d attempt(s): %s", i, msg)
+			return nil
+		} else {
+			lastErr = msg
+		}
+	}
+	warpMonitorStopped = true
+	return common.NewErrorf("连续更换 10 次仍不可用，已停止本轮 WARP 自动更换: %s", lastErr)
+}
+
+func (s *WarpService) testWarpOutbound(outbound map[string]any, outbounds []any) (bool, string) {
+	outboundJSON, _ := json.Marshal(outbound)
+	allOutboundsJSON, _ := json.Marshal(outbounds)
+	testURL, _ := s.SettingService.GetXrayOutboundTestUrl()
+	result, err := (&OutboundService{}).TestOutbound(string(outboundJSON), testURL, string(allOutboundsJSON))
+	if err != nil {
+		return false, err.Error()
+	}
+	if result == nil {
+		return false, "empty test result"
+	}
+	if result.Success {
+		return true, fmt.Sprintf("%dms", result.Delay)
+	}
+	return false, result.Error
+}
+
+func generateWarpKeypair() (string, string, error) {
+	privateKey := make([]byte, 32)
+	if _, err := rand.Read(privateKey); err != nil {
+		return "", "", err
+	}
+	privateKey[0] &= 248
+	privateKey[31] = (privateKey[31] & 127) | 64
+	publicKey, err := curve25519.X25519(privateKey, curve25519.Basepoint)
+	if err != nil {
+		return "", "", err
+	}
+	return base64.StdEncoding.EncodeToString(privateKey), base64.StdEncoding.EncodeToString(publicKey), nil
+}
+
+func loadWarpXrayConfig() (map[string]any, []any, map[string]any, error) {
+	templateConfig, err := (&SettingService{}).GetXrayConfigTemplate()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var configMap map[string]any
+	if err := json.Unmarshal([]byte(templateConfig), &configMap); err != nil {
+		return nil, nil, nil, err
+	}
+	outbounds, _ := configMap["outbounds"].([]any)
+	for _, outbound := range outbounds {
+		outboundMap, ok := outbound.(map[string]any)
+		if !ok {
+			continue
+		}
+		if outboundMap["tag"] == "warp" {
+			return configMap, outbounds, outboundMap, nil
+		}
+	}
+	return configMap, outbounds, nil, nil
+}
+
+func buildWarpOutbound(warpData map[string]string, warpConfig map[string]any) (map[string]any, error) {
+	configObj, ok := warpConfig["config"].(map[string]any)
+	if !ok {
+		return nil, common.NewError("invalid WARP config")
+	}
+	iface, _ := configObj["interface"].(map[string]any)
+	addressesMap, _ := iface["addresses"].(map[string]any)
+	addresses := make([]string, 0, 2)
+	if v4, _ := addressesMap["v4"].(string); v4 != "" {
+		addresses = append(addresses, v4+"/32")
+	}
+	if v6, _ := addressesMap["v6"].(string); v6 != "" {
+		addresses = append(addresses, v6+"/128")
+	}
+	clientID, _ := configObj["client_id"].(string)
+	reservedBytes, err := base64.StdEncoding.DecodeString(clientID)
+	if err != nil {
+		return nil, err
+	}
+	reserved := make([]int, len(reservedBytes))
+	for i, b := range reservedBytes {
+		reserved[i] = int(b)
+	}
+	peers, _ := configObj["peers"].([]any)
+	if len(peers) == 0 {
+		return nil, common.NewError("invalid WARP config: missing peer")
+	}
+	peer, _ := peers[0].(map[string]any)
+	endpoint, _ := peer["endpoint"].(map[string]any)
+	host, _ := endpoint["host"].(string)
+	publicKey, _ := peer["public_key"].(string)
+	if host == "" || publicKey == "" {
+		return nil, common.NewError("invalid WARP config: missing endpoint")
+	}
+
+	return map[string]any{
+		"tag":      "warp",
+		"protocol": "wireguard",
+		"settings": map[string]any{
+			"mtu":            1420,
+			"secretKey":      warpData["private_key"],
+			"address":        addresses,
+			"reserved":       reserved,
+			"domainStrategy": "ForceIP",
+			"peers": []map[string]any{{
+				"publicKey": publicKey,
+				"endpoint":  host,
+			}},
+			"noKernelTun": false,
+		},
+	}, nil
+}
+
+func replaceOutboundByTag(outbounds []any, tag string, replacement map[string]any) []any {
+	next := append([]any(nil), outbounds...)
+	for i, outbound := range next {
+		outboundMap, ok := outbound.(map[string]any)
+		if ok && outboundMap["tag"] == tag {
+			next[i] = replacement
+			return next
+		}
+	}
+	return append(next, replacement)
+}
+
+func saveWarpReplacement(configMap map[string]any, outbounds []any, warpData map[string]string) error {
+	warpDataJSON, err := json.MarshalIndent(warpData, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := (&SettingService{}).SetWarp(string(warpDataJSON)); err != nil {
+		return err
+	}
+
+	configMap["outbounds"] = outbounds
+	newConfigBytes, err := json.MarshalIndent(configMap, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := (&XraySettingService{}).SaveXraySetting(string(newConfigBytes)); err != nil {
+		return err
+	}
+	return (&XrayService{}).RestartXray(true)
 }
