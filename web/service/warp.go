@@ -232,6 +232,13 @@ func (s *WarpService) CheckAndRepairWarp() {
 	}
 }
 
+func (s *WarpService) RepairWarp() {
+	warpMonitorMu.Lock()
+	warpMonitorStopped = false
+	warpMonitorMu.Unlock()
+	s.CheckAndRepairWarp()
+}
+
 func (s *WarpService) checkAndRepairWarpLocked() error {
 	configMap, outbounds, current, err := loadWarpXrayConfig()
 	if err != nil || current == nil {

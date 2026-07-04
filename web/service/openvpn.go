@@ -178,12 +178,14 @@ func (s *OpenVPNService) RecoverStaleVPNGateOutbound() {
 		return
 	}
 	_, tunIP, ok := getXrayVPNGateOutbound()
-	if ok && (tunIP == "" || vpnGateTunIPActive(tunIP)) {
+	if ok && tunIP != "" && vpnGateTunIPActive(tunIP) {
 		return
 	}
 	if ok {
 		logger.Warningf("[VPNGate] Removing stale outbound for missing tun IP %s", tunIP)
-		cleanupOpenVPNPolicyRoute(tunIP)
+		if tunIP != "" {
+			cleanupOpenVPNPolicyRoute(tunIP)
+		}
 		if err := removeXrayVPNGateOutbound(); err != nil {
 			logger.Warningf("[VPNGate] Failed to remove stale outbound: %v", err)
 		}
@@ -193,21 +195,7 @@ func (s *OpenVPNService) RecoverStaleVPNGateOutbound() {
 		return
 	}
 
-	settingService := &SettingService{}
-	ruleMode, err := settingService.GetVPNGateRuleMode()
-	if err != nil {
-		ruleMode = "default"
-	}
-	countriesStr, err := settingService.GetVPNGateSelectedCountries()
-	if err != nil {
-		countriesStr = "[]"
-	}
-	var selectedCountries []string
-	_ = json.Unmarshal([]byte(countriesStr), &selectedCountries)
-	fallbackEnable, err := settingService.GetVPNGateFallbackEnable()
-	if err != nil {
-		fallbackEnable = true
-	}
+	ruleMode, selectedCountries, fallbackEnable := savedVPNGateOptions()
 
 	vpnGateOpenVPN.Lock()
 	vpnGateOpenVPN.stopLocked()
@@ -225,6 +213,51 @@ func (s *OpenVPNService) RecoverStaleVPNGateOutbound() {
 	vpnGateOpenVPN.Unlock()
 
 	triggerVPNGateFailoverAsync(taskID)
+}
+
+func savedVPNGateOptions() (string, []string, bool) {
+	settingService := &SettingService{}
+	ruleMode, err := settingService.GetVPNGateRuleMode()
+	if err != nil {
+		ruleMode = "default"
+	}
+	countriesStr, err := settingService.GetVPNGateSelectedCountries()
+	if err != nil {
+		countriesStr = "[]"
+	}
+	var selectedCountries []string
+	_ = json.Unmarshal([]byte(countriesStr), &selectedCountries)
+	fallbackEnable, err := settingService.GetVPNGateFallbackEnable()
+	if err != nil {
+		fallbackEnable = true
+	}
+	return normalizeVPNGateRuleMode(ruleMode), selectedCountries, fallbackEnable
+}
+
+func (s *OpenVPNService) CheckAndRepairVPNGate() bool {
+	status := s.VPNGateStatus()
+	if status.Phase != "connected" {
+		s.RecoverStaleVPNGateOutbound()
+		return false
+	}
+	ruleMode, selectedCountries, fallbackEnable := savedVPNGateOptions()
+	vpnGateOpenVPN.Lock()
+	if vpnGateOpenVPN.status.Phase != "connected" {
+		vpnGateOpenVPN.Unlock()
+		return false
+	}
+	vpnGateOpenVPN.ruleMode = ruleMode
+	vpnGateOpenVPN.selectedCountries = selectedCountries
+	vpnGateOpenVPN.fallbackEnable = fallbackEnable
+	vpnGateOpenVPN.globalFallback = false
+	vpnGateOpenVPN.status.Phase = "connecting"
+	vpnGateOpenVPN.status.Progress = 50
+	vpnGateOpenVPN.status.Message = "出站测试失败，正在自动选择后备节点"
+	vpnGateOpenVPN.status.Error = ""
+	taskID := vpnGateOpenVPN.id
+	vpnGateOpenVPN.Unlock()
+	triggerVPNGateFailoverAsync(taskID)
+	return true
 }
 
 func (s *OpenVPNService) PrepareVPNGateOpenVPN() {

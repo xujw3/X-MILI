@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"strconv"
+	"time"
 
 	"github.com/mhsanaei/3x-ui/v2/util/common"
 	"github.com/mhsanaei/3x-ui/v2/web/service"
@@ -290,13 +291,14 @@ func (a *XraySettingController) resetOutboundsTraffic(c *gin.Context) {
 func (a *XraySettingController) testOutbound(c *gin.Context) {
 	outboundJSON := c.PostForm("outbound")
 	allOutboundsJSON := c.PostForm("allOutbounds")
+	useLatestManaged := c.PostForm("useLatestManaged") != "false"
 
 	if outboundJSON == "" {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), common.NewError("outbound parameter is required"))
 		return
 	}
 
-	if c.PostForm("useLatestManaged") != "false" {
+	if useLatestManaged {
 		if templateConfig, err := a.SettingService.GetXrayConfigTemplate(); err == nil {
 			outboundJSON, allOutboundsJSON = syncManagedOutboundTestConfig(outboundJSON, allOutboundsJSON, templateConfig)
 		}
@@ -311,7 +313,26 @@ func (a *XraySettingController) testOutbound(c *gin.Context) {
 		return
 	}
 
+	if useLatestManaged && result != nil && !result.Success {
+		a.repairManagedOutboundAfterFailedTest(outboundJSON)
+	}
 	jsonObj(c, result, nil)
+}
+
+func (a *XraySettingController) repairManagedOutboundAfterFailedTest(outboundJSON string) {
+	var outbound map[string]any
+	if err := json.Unmarshal([]byte(outboundJSON), &outbound); err != nil {
+		return
+	}
+	switch outbound["tag"] {
+	case "warp":
+		go func() {
+			time.Sleep(500 * time.Millisecond)
+			a.WarpService.RepairWarp()
+		}()
+	case "vpngate":
+		a.OpenVPNService.CheckAndRepairVPNGate()
+	}
 }
 
 func syncManagedOutboundTestConfig(outboundJSON, allOutboundsJSON, templateConfig string) (string, string) {
