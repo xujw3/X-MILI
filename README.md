@@ -35,7 +35,7 @@ X-MILI 是一个简洁版代理面板：
 
 ### 宿主机版
 
-推荐生产环境使用，VPNGate/OpenVPN 路由更稳定。
+推荐生产环境使用。
 
 | 项目 | 说明 |
 | --- | --- |
@@ -92,6 +92,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/Aimilibot/X-MILI/main/install-
 - VPNGate/OpenVPN 一键连接并生成 `vpngate` 出站
 
 ## ml 快捷键
+
+输入：“ml” 打开菜单快捷键
 
 宿主机版：
 
