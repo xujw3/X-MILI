@@ -18,7 +18,9 @@ ENV CGO_ENABLED=1
 ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
 RUN go build -ldflags "-w -s" -o build/x-ui main.go \
   && if [ -n "$BUILD_COMMIT" ]; then printf '%s\n' "$BUILD_COMMIT" > build/.x-mili-commit; fi
-RUN ./DockerInit.sh "$TARGETARCH"
+# Scripts may be checked out without +x (e.g. Windows / 100644 in git).
+RUN chmod +x DockerInit.sh DockerEntrypoint.sh x-ui.sh \
+  && ./DockerInit.sh "$TARGETARCH"
 
 # ========================================================
 # Stage: Final Image of X-MILI
