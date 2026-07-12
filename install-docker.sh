@@ -9,8 +9,9 @@ SRC_DIR="${X_MILI_DOCKER_SOURCE_DIR:-${INSTALL_ROOT}/src}"
 DATA_DIR="${X_MILI_DOCKER_DATA_DIR:-/etc/x-ui}"
 CERT_DIR="${X_MILI_DOCKER_CERT_DIR:-/root/cert}"
 CONTAINER_NAME="${X_MILI_DOCKER_CONTAINER:-ml_app}"
-IMAGE_NAME="${X_MILI_DOCKER_IMAGE:-x-mili:latest}"
+IMAGE_NAME="${X_MILI_DOCKER_IMAGE:-kingxujw/x-mili:latest}"
 COMPOSE_FILE="${INSTALL_ROOT}/docker-compose.yml"
+PULL_IMAGE="${X_MILI_DOCKER_PULL:-1}"
 LANG_DIR="/etc/x-mili"
 LANG_FILE="${LANG_DIR}/lang"
 
@@ -98,10 +99,10 @@ write_compose() {
     cat > "${COMPOSE_FILE}" <<EOF
 services:
   ml:
+    image: ${IMAGE_NAME}
     build:
       context: ${SRC_DIR}
       dockerfile: Dockerfile
-    image: ${IMAGE_NAME}
     container_name: ${CONTAINER_NAME}
     volumes:
       - ${DATA_DIR}:/etc/x-ui
@@ -118,6 +119,21 @@ services:
       - /dev/net/tun:/dev/net/tun
     restart: unless-stopped
 EOF
+}
+
+# Prefer the CI-published image; fall back to local build when pull fails
+# or X_MILI_DOCKER_PULL=0 is set.
+ensure_image() {
+    if [[ "${PULL_IMAGE}" == "1" ]]; then
+        is_zh && log "拉取镜像 ${IMAGE_NAME}" || log "Pulling image ${IMAGE_NAME}"
+        if docker pull "${IMAGE_NAME}"; then
+            return
+        fi
+        is_zh && warn "镜像拉取失败，改为本地构建" || warn "Image pull failed, building locally"
+    else
+        is_zh && log "跳过拉取，本地构建镜像" || log "Skip pull, building image locally"
+    fi
+    compose build
 }
 
 compose() {
@@ -401,20 +417,22 @@ print_guide() {
 
 choose_language
 is_zh && log "开始安装/更新 Docker 版 ${APP_NAME}" || log "Installing/updating Docker ${APP_NAME}"
-is_zh && step 1 6 "安装基础依赖" || step 1 6 "Installing base dependencies"
+is_zh && step 1 7 "安装基础依赖" || step 1 7 "Installing base dependencies"
 install_base_deps
-is_zh && step 2 6 "安装并检查 Docker" || step 2 6 "Installing/checking Docker"
+is_zh && step 2 7 "安装并检查 Docker" || step 2 7 "Installing/checking Docker"
 install_docker
-is_zh && step 3 6 "准备 TUN 设备和项目源码" || step 3 6 "Preparing TUN device and source"
+is_zh && step 3 7 "准备 TUN 设备和项目源码" || step 3 7 "Preparing TUN device and source"
 prepare_tun
 prepare_source
-is_zh && step 4 6 "写入 Docker Compose 配置" || step 4 6 "Writing Docker Compose config"
+is_zh && step 4 7 "写入 Docker Compose 配置" || step 4 7 "Writing Docker Compose config"
 write_compose
 save_installer_copy
-is_zh && step 5 6 "构建并启动容器" || step 5 6 "Building and starting container"
+is_zh && step 5 7 "拉取或构建镜像" || step 5 7 "Pulling or building image"
+ensure_image
+is_zh && step 6 7 "启动容器" || step 6 7 "Starting container"
 is_zh && warn "Docker 版会使用 host 网络和 TUN 设备，以支持 Xray/WARP/VPNGate 路由" || warn "Docker uses host network and TUN for Xray/WARP/VPNGate routing"
-compose up -d --build
-is_zh && step 6 6 "写入主机 ml 菜单并初始化面板" || step 6 6 "Writing host ml menu and initializing panel"
+compose up -d
+is_zh && step 7 7 "写入主机 ml 菜单并初始化面板" || step 7 7 "Writing host ml menu and initializing panel"
 write_host_menu
 init_panel_settings
 print_guide

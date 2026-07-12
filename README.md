@@ -56,9 +56,23 @@ bash <(curl -Ls https://raw.githubusercontent.com/Aimilibot/X-MILI/main/install.
 | 支持系统 | 能正常运行 Docker 和 Docker Compose 插件的 Linux VPS |
 | 必要条件 | root、Docker、Docker Compose、TUN/TAP、host 网络 |
 | 适合场景 | 快速重装、容器管理、测试环境 |
+| 预构建镜像 | `kingxujw/x-mili:latest`（Docker Hub，main 分支 CI 自动构建 amd64/arm64） |
+
+一键安装（优先拉取 Docker Hub 镜像，失败再本地构建）：
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/Aimilibot/X-MILI/main/install-docker.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/xujw3/X-MILI/main/install-docker.sh)
+```
+
+仅使用预构建镜像：
+
+```bash
+docker pull kingxujw/x-mili:latest
+docker run -d --name ml_app --network host --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
+  -v /etc/x-ui:/etc/x-ui -v /root/cert:/root/cert \
+  --restart unless-stopped \
+  kingxujw/x-mili:latest
 ```
 
 安装完成后，终端会输出面板地址、账号、密码和安全路径。

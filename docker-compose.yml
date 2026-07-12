@@ -1,5 +1,8 @@
 services:
   ml:
+    # Prebuilt: kingxujw/x-mili:latest (Docker Hub, CI on main)
+    # Local: docker compose build
+    image: ${X_MILI_DOCKER_IMAGE:-kingxujw/x-mili:latest}
     build:
       context: .
       dockerfile: ./Dockerfile
