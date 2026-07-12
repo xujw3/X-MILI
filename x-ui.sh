@@ -435,19 +435,28 @@ start() {
     check_status
     if [[ $? == 0 ]]; then
         echo ""
-        LOGI "Panel is running, No need to start again, If you need to restart, please select restart"
+        is_zh && LOGI "面板已在运行，无需重复启动；如需重启请选重启" || LOGI "Panel is running, No need to start again, If you need to restart, please select restart"
     else
-        if [[ $release == "alpine" ]]; then
+        if [[ ! -x "${xui_folder}/x-ui" ]]; then
+            is_zh && LOGE "未找到可执行文件 ${xui_folder}/x-ui，请重新安装" || LOGE "Missing executable ${xui_folder}/x-ui, please reinstall"
+        elif [[ $release == "alpine" ]]; then
             rc-service x-ui start
         else
+            systemctl reset-failed x-ui >/dev/null 2>&1 || true
             systemctl start x-ui
         fi
         sleep 2
         check_status
         if [[ $? == 0 ]]; then
-            LOGI "x-ui Started Successfully"
+            is_zh && LOGI "面板启动成功" || LOGI "x-ui Started Successfully"
         else
-            LOGE "panel Failed to start, Probably because it takes longer than two seconds to start, Please check the log information later"
+            is_zh && LOGE "面板启动失败。最近日志：" || LOGE "Panel failed to start. Recent logs:"
+            if [[ $release == "alpine" ]]; then
+                grep -F 'x-ui[' /var/log/messages | tail -n 50 || true
+            else
+                systemctl status x-ui --no-pager -l || true
+                journalctl -u x-ui -n 50 --no-pager || true
+            fi
         fi
     fi
 
@@ -482,17 +491,26 @@ stop() {
 }
 
 restart() {
-    if [[ $release == "alpine" ]]; then
+    if [[ ! -x "${xui_folder}/x-ui" ]]; then
+        is_zh && LOGE "未找到可执行文件 ${xui_folder}/x-ui，请重新安装" || LOGE "Missing executable ${xui_folder}/x-ui, please reinstall"
+    elif [[ $release == "alpine" ]]; then
         rc-service x-ui restart
     else
+        systemctl reset-failed x-ui >/dev/null 2>&1 || true
         systemctl restart x-ui
     fi
     sleep 2
     check_status
     if [[ $? == 0 ]]; then
-        LOGI "x-ui and xray Restarted successfully"
+        is_zh && LOGI "面板与 Xray 已重启" || LOGI "x-ui and xray Restarted successfully"
     else
-        LOGE "Panel restart failed, Probably because it takes longer than two seconds to start, Please check the log information later"
+        is_zh && LOGE "面板重启失败。最近日志：" || LOGE "Panel restart failed. Recent logs:"
+        if [[ $release == "alpine" ]]; then
+            grep -F 'x-ui[' /var/log/messages | tail -n 50 || true
+        else
+            systemctl status x-ui --no-pager -l || true
+            journalctl -u x-ui -n 50 --no-pager || true
+        fi
     fi
     if [[ $# == 0 ]]; then
         before_show_menu
@@ -500,8 +518,21 @@ restart() {
 }
 
 restart_xray() {
-    systemctl reload x-ui
-    LOGI "xray-core Restart signal sent successfully, Please check the log information to confirm whether xray restarted successfully"
+    check_status
+    if [[ $? != 0 ]]; then
+        is_zh && LOGE "面板未运行，无法单独重启 Xray；请先启动/重启面板" || LOGE "Panel is not running; start/restart the panel first"
+    elif [[ $release == "alpine" ]]; then
+        # Alpine openrc unit may not support reload; fall back to full restart.
+        rc-service x-ui restart
+        is_zh && LOGI "已重启面板以重载 Xray" || LOGI "Panel restarted to reload xray-core"
+    else
+        if systemctl reload x-ui; then
+            is_zh && LOGI "已向 Xray 发送重启信号" || LOGI "xray-core restart signal sent"
+        else
+            is_zh && LOGE "reload 失败，尝试完整重启面板" || LOGE "reload failed, trying full panel restart"
+            systemctl restart x-ui || true
+        fi
+    fi
     sleep 2
     show_xray_status
     if [[ $# == 0 ]]; then

@@ -136,6 +136,25 @@ ensure_image() {
     compose build
 }
 
+ensure_container_running() {
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        if docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null | grep -qx true; then
+            # 进程在跑还不够：确认面板二进制能响应 setting
+            if docker exec "${CONTAINER_NAME}" /app/x-ui -v >/dev/null 2>&1; then
+                is_zh && log "容器已运行: ${CONTAINER_NAME}" || log "Container is running: ${CONTAINER_NAME}"
+                return 0
+            fi
+        fi
+        sleep 1
+    done
+
+    is_zh && warn "容器未能保持运行，状态与日志：" || warn "Container did not stay running, status and logs:"
+    docker ps -a --filter "name=^/${CONTAINER_NAME}$" || true
+    docker logs --tail=120 "${CONTAINER_NAME}" 2>&1 || true
+    fail "Docker 容器启动失败。请检查 docker logs ${CONTAINER_NAME}、TUN 设备与镜像 ${IMAGE_NAME}"
+}
+
 compose() {
     docker compose -f "${COMPOSE_FILE}" "$@"
 }
@@ -431,7 +450,8 @@ is_zh && step 5 7 "拉取或构建镜像" || step 5 7 "Pulling or building image
 ensure_image
 is_zh && step 6 7 "启动容器" || step 6 7 "Starting container"
 is_zh && warn "Docker 版会使用 host 网络和 TUN 设备，以支持 Xray/WARP/VPNGate 路由" || warn "Docker uses host network and TUN for Xray/WARP/VPNGate routing"
-compose up -d
+compose up -d --remove-orphans
+ensure_container_running
 is_zh && step 7 7 "写入主机 ml 菜单并初始化面板" || step 7 7 "Writing host ml menu and initializing panel"
 write_host_menu
 init_panel_settings

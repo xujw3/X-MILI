@@ -228,6 +228,13 @@ print_install_guide() {
 }
 
 install_service() {
+    local bin="${INSTALL_DIR}/x-ui"
+    local xray_bin
+    [[ -x "$bin" ]] || fail "面板二进制不存在或不可执行: ${bin}"
+    xray_bin=$(ls "${INSTALL_DIR}"/bin/xray-linux-* 2>/dev/null | head -n1 || true)
+    [[ -n "$xray_bin" && -f "$xray_bin" ]] || fail "未找到 Xray 二进制: ${INSTALL_DIR}/bin/xray-linux-*"
+    chmod +x "$bin" "$xray_bin" 2>/dev/null || true
+
     cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
 Description=X-MILI Service
@@ -239,16 +246,38 @@ EnvironmentFile=-/etc/default/x-ui
 Environment="XRAY_VMESS_AEAD_FORCED=false"
 Type=simple
 WorkingDirectory=${INSTALL_DIR}/
-ExecStart=${INSTALL_DIR}/x-ui
-ExecReload=kill -USR1 \$MAINPID
+ExecStart=${bin}
+ExecReload=/bin/kill -USR1 \$MAINPID
 Restart=on-failure
 RestartSec=5s
+LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable --now x-ui
+    systemctl reset-failed x-ui >/dev/null 2>&1 || true
+    systemctl enable x-ui >/dev/null 2>&1 || true
+    if ! systemctl restart x-ui; then
+        is_zh && warn "systemctl 启动失败，最近日志：" || warn "systemctl start failed, recent logs:"
+        journalctl -u x-ui -n 80 --no-pager || true
+        fail "面板服务启动失败，请根据上方日志排查"
+    fi
+
+    # enable --now / restart 成功后仍可能立刻崩溃，等待并确认 active
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if systemctl is-active --quiet x-ui; then
+            is_zh && log "面板服务已启动 (systemctl is-active=active)" || log "Panel service is active"
+            return 0
+        fi
+        sleep 1
+    done
+
+    is_zh && warn "面板服务未能保持运行，状态与日志：" || warn "Panel service did not stay running, status and logs:"
+    systemctl status x-ui --no-pager -l || true
+    journalctl -u x-ui -n 80 --no-pager || true
+    fail "面板服务启动后退出。请检查端口占用、依赖库与 journalctl -u x-ui"
 }
 
 install_prebuilt_bundle() {
@@ -274,6 +303,13 @@ install_prebuilt_bundle() {
     cp -a "$package_dir"/. "$INSTALL_DIR/"
     install -m 755 "$package_dir/x-ui.sh" /usr/bin/ml
     chmod +x "$INSTALL_DIR/x-ui" "$INSTALL_DIR"/bin/xray-linux-* 2>/dev/null || true
+    # 安装阶段就验证二进制可执行，避免“安装成功但服务起不来”
+    if ! "$INSTALL_DIR/x-ui" -v >/dev/null 2>&1; then
+        is_zh && warn "x-ui -v 执行失败，可能是架构不匹配或缺少动态库" || warn "x-ui -v failed: arch mismatch or missing shared libraries"
+        file "$INSTALL_DIR/x-ui" 2>/dev/null || true
+        ldd "$INSTALL_DIR/x-ui" 2>/dev/null || true
+        return 1
+    fi
     return 0
 }
 
