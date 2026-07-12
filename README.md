@@ -58,13 +58,15 @@ bash <(curl -Ls https://raw.githubusercontent.com/xujw3/X-MILI/main/install.sh)
 | 适合场景 | 快速重装、容器管理、测试环境 |
 | 预构建镜像 | `kingxujw/x-mili:latest`（Docker Hub，main 分支 CI 自动构建 amd64/arm64） |
 
-一键安装（优先拉取 Docker Hub 镜像，失败再本地构建）：
+#### 方式 A：一键安装脚本（推荐）
+
+优先拉取 Docker Hub 镜像，失败再本地构建；结束时会打印面板地址、账号、密码和安全路径，并写入主机 `ml` 管理菜单。
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/xujw3/X-MILI/main/install-docker.sh)
 ```
 
-仅使用预构建镜像：
+#### 方式 B：仅 `docker run` 预构建镜像
 
 ```bash
 docker pull kingxujw/x-mili:latest
@@ -75,7 +77,30 @@ docker run -d --name ml_app --network host --cap-add NET_ADMIN \
   kingxujw/x-mili:latest
 ```
 
-安装完成后，终端会输出面板地址、账号、密码和安全路径。
+**账号密码说明（很重要）：**
+
+| 安装方式 | 账号密码从哪来 |
+| --- | --- |
+| 方式 A 一键脚本 | 安装结束时终端打印；一路回车则为随机生成 |
+| 方式 B 纯 `docker run` | **不会打印账号密码**。数据目录 `/etc/x-ui` 为新库时，默认用户名/密码均为 `admin` |
+
+密码在数据库中为哈希存储，之后无法用命令再「查回」明文密码。
+
+**纯 `docker run` 后修改账号密码（在宿主机执行）：**
+
+```bash
+docker exec ml_app /app/x-ui setting -username 'admin' -password '你的新密码' -resetTwoFactor true
+docker exec ml_app /app/x-ui setting -show true   # 可看 port、webBasePath；不会显示密码
+docker restart ml_app
+```
+
+登录地址一般为：`http://服务器IP:2053/`（若 `webBasePath` 不是 `/`，需带上安全后缀）。
+
+**不要在容器里用 `ml` 安装/改密：**
+
+- 容器内的 `ml` 菜单是按**宿主机 systemd 版**设计的
+- 在容器里会出现「面板未安装」「需要 systemd」等提示，属于预期行为
+- Docker 版请使用：`docker exec ml_app /app/x-ui setting ...`、`docker restart ml_app`、`docker logs ml_app`
 
 ## 快速教程
 
@@ -152,6 +177,12 @@ ml uninstall        # 卸载，默认保留数据
 ### Docker 版 VPNGate 不工作
 
 确认容器使用 host 网络、`/dev/net/tun` 和 `NET_ADMIN`。一键 Docker 脚本已默认配置。
+
+### 纯 docker run 后没有账号密码 / 容器内 ml 提示未安装
+
+- 纯 `docker run` **不会**在终端打印账号密码；新库默认是 `admin` / `admin`
+- 在宿主机执行 `docker exec ml_app /app/x-ui setting -username '...' -password '...'` 重置，再 `docker restart ml_app`
+- 容器内不要用 `ml` 做安装；`ml` 面向宿主机 systemd 版，在容器里会误报未安装
 
 ## 交流与支持
 
