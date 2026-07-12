@@ -183,7 +183,7 @@ main.go
 
 ## 修改时注意
 
-- **模块路径**：import 使用 `github.com/mhsanaei/3x-ui/v2/...`，与 GitHub 仓库名 `Aimilibot/X-MILI` 不同，勿随意改 module path。
+- **模块路径**：import 使用 `github.com/mhsanaei/3x-ui/v2/...`，与 GitHub 仓库名 `xujw3/X-MILI` 不同，勿随意改 module path。
 - **CGO**：SQLite 驱动需要 `CGO_ENABLED=1`；Windows 本地开发需可用的 C 编译器。
 - **前后端同仓**：改面板 UI 通常改 `web/html/**` 与 `web/assets/js/**`，无需 Node 构建；生产靠 embed，debug 模式才热读磁盘。
 - **出站标签**：`vpngate` 为约定常量（`vpnGateOutboundTag`）；路由规则与统计按 tag 关联，改名需前后端与 OpenVPN 服务一并改。
